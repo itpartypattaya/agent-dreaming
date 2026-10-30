@@ -29,6 +29,9 @@ from .sources import claude_code as src_claude
 from .sources import codex as src_codex
 
 
+CLAUDE_CACHE = "claude-lines.json"  # positions of the lines a pass reads, never their words
+
+
 def today() -> str:
     return datetime.now().astimezone().strftime("%Y-%m-%d")
 
@@ -85,7 +88,7 @@ def gather(homes: Homes, settings: dict, now: float) -> dict:
     msgs, coverage = [], {}
     clients = settings.get("clients") or []
     if "claude-code" in clients:
-        got, cov = src_claude.read(homes.claude_projects, since, now)
+        got, cov = src_claude.read(homes.claude_projects, since, now, cache=homes.dreaming / CLAUDE_CACHE)
         msgs += got
         coverage["claude-code"] = cov.as_dict()
     if "codex" in clients:
@@ -170,11 +173,15 @@ def pass_profile(pdir: Path, profile: config.Profile, settings: dict, tz: str, d
     coverage_ok = all(c["status"] == COMPLETE for c in data["coverage"].values()) and data["notes_ok"]
     ids = {i.get("fact_id") for k in ("promotions", "new_facts", "confirm", "trust_feedback", "fact_decays", "conflicts")
            for i in result.get(k) or []}
-    facts = store.facts_state(profile.store, ids)
+    wrong = store.went_wrong(profile.store)
+    facts = store.facts_state(profile.store, ids | {w["fact_id"] for w in wrong})
+    rejected = read_json(state_dir / "rejected.json", {}) or {}
     qs, skipped = questions.build(result, store=str(profile.store) if profile.store else None, facts=facts,
                                   notes_index=index, coverage_ok=coverage_ok,
                                   max_questions=int(settings.get("max_questions", 7)), profile=profile.name,
-                                  night_tag=uuid.uuid4().hex[:4])
+                                  night_tag=uuid.uuid4().hex[:4], went_wrong=wrong,
+                                  answered=questions.outcomes_answered(state_dir),
+                                  rejected=set(rejected) if isinstance(rejected, dict) else set())
     alerts = [a for a in result.get("alerts") or []
               if coverage_ok or a.get("kind") not in ("memory_loss", "entry_truncated", "probe_missing")]
     doc = {"generated_at": result["generated_at"], "profile": profile.name,
@@ -276,7 +283,8 @@ def forget_sweep(homes: Homes, out=sys.stdout) -> int:
             for q in doc["questions"]:
                 ids = {q.get("fact_id")} | {(q.get(s) or {}).get("fact_id") for s in ("keep", "copy")}
                 if gone & {i for i in ids if isinstance(i, int)}:
-                    for k in ("content", "keep", "copy", "why", "conflicts", "call", "text", "result", "note"):
+                    for k in ("content", "keep", "copy", "why", "conflicts", "call", "text", "result", "note",
+                              "outcome"):
                         q.pop(k, None)
                     q["failure"] = "forgotten"
                     if q["status"] in questions.OPEN:

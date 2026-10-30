@@ -1,6 +1,6 @@
 {
   "name": "agent-dreaming",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "A nightly, read-only memory review for Claude Code: what you really said, checked against the facts agents stored (holographic-memory) and Claude's own memory notes. Asks a few questions; changes memory only on your yes. Needs the dreamem command on PATH.",
   "author": {
     "name": "Anton Vaskov",

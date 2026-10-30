@@ -175,3 +175,45 @@ def test_the_trust_reminder_only_when_our_hooks_change(tmp_path, monkeypatch):
     third = io.StringIO()
     install.install_codex(h, remove=False, dry_run=False, out=third)
     assert "/hooks" in third.getvalue()  # a hook was rewritten: its trust is gone, say so
+
+
+def test_no_trust_reminder_for_a_header_written_another_way(tmp_path, monkeypatch):
+    """Codex review of 0.3.3: a header of our block with spaces or a comment is the same hook to Codex (its trust is
+    kept by the hook as it parses, and its place), yet the reminder came because the block's text differed."""
+    from dreamem.paths import homes
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    h = homes({"CODEX_HOME": str(tmp_path / ".codex"), "DREAMEM_HOME": str(tmp_path / ".dreaming")})
+    install.install_codex(h, remove=False, dry_run=False, out=io.StringIO(), prompt=lambda q: "any")
+    cfg = tmp_path / ".codex" / "config.toml"
+    cfg.write_text(cfg.read_text(encoding="utf-8").replace("[[hooks.SessionStart.hooks]]",
+                                                           "[[ hooks.SessionStart.hooks ]] # session hook", 1),
+                   encoding="utf-8")
+    again = io.StringIO()
+    install.install_codex(h, remove=False, dry_run=False, out=again)
+    assert "backup" in again.getvalue()  # the file did change: the header is written back as ours
+    assert "/hooks" not in again.getvalue()
+
+
+def test_a_trust_reminder_when_our_hooks_move(tmp_path, monkeypatch):
+    """Codex keeps trust per hook by its place too (``session_start:<group>:<hook>``). A hook group of someone else's
+    inside our block, before our hooks, is moved out after it: our hooks move up a place and need trusting again."""
+    from dreamem.paths import homes
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    h = homes({"CODEX_HOME": str(tmp_path / ".codex"), "DREAMEM_HOME": str(tmp_path / ".dreaming")})
+    cfg = tmp_path / ".codex" / "config.toml"
+    install.install_codex(h, remove=False, dry_run=False, out=io.StringIO(), prompt=lambda q: "any")
+    text = cfg.read_text(encoding="utf-8")
+    cfg.write_text('[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = "command"\ncommand = "other"\n\n' + text,
+                   encoding="utf-8")
+    again = io.StringIO()
+    install.install_codex(h, remove=False, dry_run=False, out=again)
+    assert "/hooks" not in again.getvalue()  # nothing of ours changed: not even rewritten
+    cfg.write_text(text.replace(install.MARK_BEGIN + "\n", install.MARK_BEGIN + '\n[[hooks.SessionStart]]\n'
+                                '[[hooks.SessionStart.hooks]]\ntype = "command"\ncommand = "other"\n\n', 1),
+                   encoding="utf-8")
+    moved = io.StringIO()
+    install.install_codex(h, remove=False, dry_run=False, out=moved)
+    assert "backup" in moved.getvalue() and "/hooks" in moved.getvalue()
+    assert 'command = "other"' in cfg.read_text(encoding="utf-8")  # theirs kept, after our block

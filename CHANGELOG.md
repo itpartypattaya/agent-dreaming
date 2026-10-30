@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0 — unreleased
+
+- A new kind of question from holographic-memory's outcome journal (0.4+, `experience = true`): a fact an agent
+  reported an answer went wrong with — named by its correction, or offered in two answers that went wrong — for a
+  stale version or a reason it did not narrow down. Asked once per report, only while the fact is still the version
+  the answer saw; reports about the search or the answer itself raise nothing, a revised report raises nothing. The
+  report is shown as the agent's, not the person's; a correction line holding a secret is not shown. Answers as for
+  "still true?": keep / outdated / changed / wrong / forget.
+- The pass reads Claude Code transcripts several times faster after the first night: `~/.dreaming/claude-lines.json`
+  keeps where the lines that may be a person's start and end (positions and counts, never words), and a file is read
+  again only where it grew. A file rewritten, shortened or changed before where the last pass stopped is read whole.
+  Measured on 534 transcripts (4 GB): 14.4 s → 2.3 s.
+- The reminder to trust the hooks in `/hooks` compares our hooks as Codex parses them, with their place: a header
+  written with spaces or a comment no longer brings it (Codex review of 0.3.3), and hooks moved to another place by
+  the reinstall now do.
+
 ## 0.3.3 — 2026-10-31
 
 - `dreamem install codex` asks for the time only with a person at a console: on Windows the NUL device

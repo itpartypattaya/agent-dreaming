@@ -29,6 +29,10 @@ It changed nothing. Your job here is to put the questions to the person and carr
    - `conflict` — a fact contradicts what memory says: **changed** (the new state, give `--text`) / **outdated** /
      **wrong** (give the right text in `--text`) / **keep**.
    - `fact_decay` — not mentioned for long: **keep** / **outdated** / **changed** / **wrong** / **forget**.
+   - `outcome` — an agent reported in holographic-memory's journal that an answer using this fact went wrong
+     (corrected, or a dead end). It is the agent's report, not the person's word: say so, show the correction
+     line if there is one, and ask whether the fact still holds: **keep** / **outdated** / **changed** /
+     **wrong** / **forget**.
    - `review` — corroborated by conversations, but nobody said it is so: **yes** / **no** / **outdated** / **wrong** /
      **forget** / **reject** (never ask again).
    - `new_fact` — an agent stored it lately, nobody confirmed: same answers as `review`.

@@ -22,6 +22,7 @@ and only through the memory tools your agent already has.
 | Look like one fact — merge? | «Supplier brings beans on Tuesdays» and «Beans arrive Tuesday mornings» | yes · not-duplicates |
 | Conflicts with what memory says | a fact says 9 pm, a note says 10 pm | changed · outdated · wrong · keep |
 | Not mentioned for long — still true? | a fact nobody has said in a month | keep · outdated · changed · wrong · forget |
+| An answer that used it went wrong — still true? | holographic-memory's journal: an agent reported it was corrected (stale fact) | keep · outdated · changed · wrong · forget |
 | An agent stored this, nobody confirmed | an agent's own conclusion | yes · no · outdated · wrong · forget · reject |
 | People keep saying it | you said it on three different days | yes · no |
 | A Claude Code note nobody mentioned lately | `memory/deploy.md` of an old project | keep · outdated (you edit the note yourself) |
@@ -31,6 +32,10 @@ Any question also takes **later**. An unanswered question comes back the next ni
 Only **your** words count as evidence. Background tasks, scheduled jobs, subagents, `codex exec` scripts, slash
 commands, reminders and quotes of the agent are recognised and left out. A message holding a secret or an instruction
 to an agent is not read at all.
+
+The journal question needs holographic-memory 0.4+ with `experience = true`. A report there is the agent's,
+not yours: it is asked only for a stale fact (not for a bad search or a wrong answer), once per report, and only
+while the fact is still the version the answer saw.
 
 ## Install
 
@@ -76,7 +81,7 @@ dreamem install schedule --dry-run
 | | |
 |---|---|
 | Reads | `~/.claude/projects/*/*.jsonl` (transcripts), `~/.claude/projects/*/memory/*.md` (auto-memory), `~/.codex/sessions/**` (`.jsonl` and `.jsonl.zst`), `~/.codex/memories*/`, `CLAUDE.md` / `AGENTS.md`, holographic-memory's database (read-only). Locations follow `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HOLOMEM_HOME`. |
-| Writes | only `~/.dreaming` (or `DREAMEM_HOME`): its state, the questions, `report.md`. Your messages are read in memory for the pass and stored nowhere — not even as snippets. |
+| Writes | only `~/.dreaming` (or `DREAMEM_HOME`): its state, the questions, `report.md`, and `claude-lines.json` — where in each transcript the lines that may be yours start and end, so the next pass does not read gigabytes of tool output again. Your messages are read in memory for the pass and stored nowhere — not even as snippets. |
 | Never | writes to memory, transcripts, Claude or Codex settings; sends anything over the network; runs a model. Memory changes are made by your agent, in a session, on your answer. (SQLite itself may create the `-wal`/`-shm` files next to the holographic-memory database when it reads a database in WAL mode whose writer is not running, as any reader does; the database is never written.) |
 
 Details: [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md).

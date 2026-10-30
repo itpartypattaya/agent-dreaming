@@ -156,6 +156,8 @@ def decide(homes: Homes, qid: str, answer: str, *, text: str | None = None, prof
                                  f"rejected in review ({q['qid']})")
             elif todo.get("local") == questions.NOT_DUPLICATES:
                 engineapi.close_proposal(state_dir, q["proposal"], "not-duplicates")
+            if q.get("status") == questions.DECIDED:
+                questions.answer_outcomes(state_dir, q, True)
         except (OSError, ValueError) as exc:
             questions.undo(q)
             out(f"error: the answer was not recorded: {exc}")
@@ -191,6 +193,7 @@ def mark(homes: Homes, qid: str, what: str, *, detail: str | None = None, profil
                     engineapi.unreject(state_dir, q["fact_id"])
                 elif q.get("answer") == "not-duplicates":
                     engineapi.close_proposal(state_dir, q["proposal"], "undo")
+                questions.answer_outcomes(state_dir, q, False)
                 questions.undo(q)
         except ValueError as exc:
             out(f"error: {exc}")

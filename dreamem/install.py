@@ -80,9 +80,21 @@ def codex_block() -> str:
     return "\n".join(lines) + "\n"
 
 
-def _hooks(block: str) -> str:
-    """Our hook groups of a block, without its marks: what Codex hashes for its trust."""
-    return block[len(MARK_BEGIN) + 1:block.rindex(MARK_END)]
+def _our_hooks(text: str) -> list | None:
+    """Each dreaming hook as Codex reads the file — its place (group, hook) and its definition, what Codex keeps trust
+    by — or None when the file does not parse. Read from the parsed TOML, not the text: a header written with spaces
+    or a comment is the same hook (Codex review of 0.3.3)."""
+    try:
+        groups = (tomllib.loads(text).get("hooks") or {}).get("SessionStart") or []
+    except (tomllib.TOMLDecodeError, AttributeError):
+        return None
+    out = []
+    for i, group in enumerate(groups if isinstance(groups, list) else []):
+        hooks = group.get("hooks") if isinstance(group, dict) else None
+        for j, hook in enumerate(hooks if isinstance(hooks, list) else []):
+            if isinstance(hook, dict) and "dreamem hook session-start" in str(hook.get("command", "")):
+                out.append((i, j, hook))
+    return out
 
 
 def _foreign(inner: str) -> str:
@@ -228,8 +240,9 @@ def install_codex(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdout, 
         _write(skill, old_skill, skill_text("dreaming"), dry_run, out)
     if not remove and not dry_run:
         ask_time(homes, prompt, out)
-    if written and not remove and _hooks(codex_block()) not in old:
-        # Trust is kept per hook by the hash of its definition: only new or rewritten hooks need it again.
+    before = _our_hooks(old)
+    if written and not remove and (before is None or before != _our_hooks(new)):
+        # Trust is kept per hook by its definition and its place: only new, rewritten or moved hooks need it again.
         print("Codex runs a hook only once it is trusted: open /hooks in Codex and trust the two dreaming hooks.",
               file=out)
     return 0
