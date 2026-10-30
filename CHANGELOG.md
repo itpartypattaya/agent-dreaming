@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 — unreleased
+## 0.4.0 — 2026-10-31
 
 - A new kind of question from holographic-memory's outcome journal (0.4+, `experience = true`): a fact an agent
   reported an answer went wrong with — named by its correction, or offered in two answers that went wrong — for a
