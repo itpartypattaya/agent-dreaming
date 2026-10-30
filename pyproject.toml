@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-dreaming"
+version = "0.2.0"
+description = "A nightly, read-only memory review for Claude Code and Codex CLI: what people really said, checked against the facts agents stored"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Anton Vaskov" }]
+# zstandard: Codex compresses rollouts older than 7 days; without it the window of Codex is cut to a week.
+# tzdata: Windows has no zone database, and the core files days by an IANA zone name.
+dependencies = [
+    "zstandard>=0.22",
+    "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.urls]
+Homepage = "https://github.com/itpartypattaya/agent-dreaming"
+Issues = "https://github.com/itpartypattaya/agent-dreaming/issues"
+
+[project.scripts]
+dreamem = "dreamem.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["dreamem*"]
+
+[tool.setuptools.package-data]
+"dreamem.engine" = ["*.py", "LICENSE", "NOTICE.md", "references/*.md"]
+"dreamem" = ["skill/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "tests"]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["dreamem/engine"]  # inherited code (see dreamem/engine/NOTICE.md), linted once it is refactored
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "BLE", "RUF100"]
+ignore = ["E501", "B905"]

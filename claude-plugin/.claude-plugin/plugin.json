@@ -1,0 +1,22 @@
+{
+  "name": "agent-dreaming",
+  "version": "0.2.0",
+  "description": "A nightly, read-only memory review for Claude Code: what you really said, checked against the facts agents stored (holographic-memory) and Claude's own memory notes. Asks a few questions; changes memory only on your yes. Needs the dreamem command on PATH.",
+  "author": {
+    "name": "Anton Vaskov",
+    "url": "https://github.com/itpartypattaya"
+  },
+  "homepage": "https://github.com/itpartypattaya/agent-dreaming",
+  "repository": "https://github.com/itpartypattaya/agent-dreaming",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "dreaming",
+    "consolidation",
+    "review",
+    "holographic-memory"
+  ],
+  "documentationUrl": "https://github.com/itpartypattaya/agent-dreaming#readme",
+  "supportUrl": "https://github.com/itpartypattaya/agent-dreaming/issues",
+  "privacyPolicyUrl": "https://github.com/itpartypattaya/agent-dreaming/blob/main/PRIVACY.md"
+}

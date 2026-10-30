@@ -1,0 +1,14 @@
+{
+  "name": "agent-dreaming",
+  "description": "Nightly read-only memory review for Claude Code and Codex CLI.",
+  "owner": {
+    "name": "itpartypattaya"
+  },
+  "plugins": [
+    {
+      "name": "agent-dreaming",
+      "source": "./claude-plugin",
+      "description": "Nightly read-only memory review: a few questions about your agents' memory each day, changes only on your yes (needs dreamem on PATH: uv tool install git+https://github.com/itpartypattaya/agent-dreaming)"
+    }
+  ]
+}
