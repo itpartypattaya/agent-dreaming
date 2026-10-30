@@ -95,3 +95,34 @@ def test_another_skill_named_dreaming_is_never_overwritten_or_removed(tmp_path, 
     assert "not ours" in out.getvalue()
     install.install_codex(h, remove=True, dry_run=False, out=io.StringIO())
     assert theirs.exists()
+
+
+def _codex_appended(text: str, setting: str) -> str:
+    """What Codex does with a new table: it appends it at the end of the file — inside our block, before its end mark
+    (seen live 2026-10-31: `[tui] screen_reader_detection_done = true`)."""
+    return text.replace(install.MARK_END, setting + "\n" + install.MARK_END)
+
+
+def test_a_setting_codex_appended_inside_the_block_is_kept():
+    tui = "[tui]\nscreen_reader_detection_done = true\n"
+    live = _codex_appended(install.codex_text(USER), tui)
+    again = install.codex_text(live)  # reinstall / upgrade
+    parsed = tomllib.loads(again)
+    assert parsed["tui"]["screen_reader_detection_done"] is True
+    assert len(parsed["hooks"]["SessionStart"]) == 2
+    assert install.codex_block() in again  # our hooks byte for byte: their trust (a hash) holds
+    assert again.index(install.MARK_END) < again.index("[tui]")  # set outside our block, never removed with it
+    assert install.codex_text(again) == again
+    removed = install.codex_text(live, remove=True)
+    assert tomllib.loads(removed)["tui"]["screen_reader_detection_done"] is True
+    assert install.MARK_BEGIN not in removed and "dreamem" not in removed
+    assert tomllib.loads(removed)["model"] == "gpt-6.1-sol"
+
+
+def test_an_old_block_with_another_python_is_replaced_not_kept():
+    old = install.codex_text(USER).replace(install.python_path(), "C:/old/python.exe")
+    old = old.replace(str(Path(install.sys.executable)).replace("\\", "\\\\"), "C:\\old\\python.exe")
+    assert "C:/old/python.exe" in old
+    new = install.codex_text(_codex_appended(old, "[tui]\nalt_screen = false\n"))
+    assert "C:/old/python.exe" not in new and "old\\python" not in new
+    assert len(tomllib.loads(new)["hooks"]["SessionStart"]) == 2 and tomllib.loads(new)["tui"]["alt_screen"] is False

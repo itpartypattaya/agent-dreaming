@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.2 — 2026-10-31
+
+- `dreamem install codex` keeps what Codex itself appended inside our block: Codex adds a new table at the end of
+  its `config.toml`, before our end mark (`[tui] screen_reader_detection_done = true`, seen live), and a reinstall
+  or `--uninstall` removed it with the block. Now only our two hook groups are replaced, byte for byte (their trust
+  in `/hooks` holds); anything else between the marks is moved after the block and kept.
+
 ## 0.3.1 — 2026-10-31
 
 - A session-start hook whose reader went away (the stdout pipe closed) ends quietly with exit 0 instead of a
