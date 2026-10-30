@@ -38,12 +38,10 @@ def test_lazy_night_runs_once_a_day(world):
 
 
 def test_a_failed_core_does_not_count_as_done(world, monkeypatch):
-    import subprocess
+    def broken(**kw):
+        raise RuntimeError("something broke")
 
-    def broken(home, out, **kw):
-        return subprocess.CompletedProcess([], 2, "", "[dream] error: something broke")
-
-    monkeypatch.setattr(run, "run_pass", broken)
+    monkeypatch.setattr(run, "run_night", broken)
     out = io.StringIO()
     assert run.run(world.homes, out=out) == 1
     assert "something broke" in out.getvalue()
@@ -135,11 +133,32 @@ def test_timezone_follows_the_machine_offset(monkeypatch, hours, name):
     assert config.timezone_name("Asia/Bangkok") == "Asia/Bangkok"
 
 
-def test_shadow_home_holds_the_store_the_bridge_opens(world):
+def test_the_engine_reads_the_store_holomem_opens(world, monkeypatch):
+    from dreamem import engineapi
+
     world.fact("Магазин закрывается в девять вечера по пятницам", origin="inferred", days_old=2)
+    configs = []
+    real = engineapi.run_night
+
+    def spy(**kw):
+        configs.append(kw["config"])
+        return real(**kw)
+
+    monkeypatch.setattr(run, "run_night", spy)
     run.run(world.homes, out=io.StringIO())
-    home = world.homes.profile("global") / "home"
-    cfg = json.loads((home / "dreaming.json").read_text(encoding="utf-8"))
-    assert cfg["fact_store_path"] == world.db.as_posix()
-    assert world.db.as_posix() in (home / "config.yaml").read_text(encoding="utf-8")
-    assert cfg["judge"] == {"mode": "off"}
+    assert configs[0]["store"] == str(world.db) and configs[0]["fact_source"] == "holographic"
+    state = sorted(p.name for p in (world.homes.profile("global") / "state").iterdir())
+    assert "seen.json" in state and not (world.homes.profile("global") / "home").exists()
+
+
+def test_cleanup_touches_only_our_own_leftovers(world):
+    """Security review: a pass removes the `.partial` files it may have left — never other files, even when the
+    home is pointed at a folder holding someone else's."""
+    world.homes.dreaming.mkdir(parents=True, exist_ok=True)
+    stranger = world.homes.dreaming / "photos" / "holiday.partial.jpg"
+    stranger.parent.mkdir(parents=True)
+    stranger.write_bytes(b"jpeg")
+    ours = world.homes.dreaming / "summary.json.partial"
+    ours.write_text("{", encoding="utf-8")
+    run.run(world.homes, out=io.StringIO())
+    assert stranger.exists() and not ours.exists()

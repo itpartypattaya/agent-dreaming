@@ -16,8 +16,9 @@ def _columns(conn, table: str) -> set[str]:
 
 
 def facts_state(path: Path | None, ids) -> dict[int, dict]:
-    """{fact_id: {version_id, origin}} of the current versions; origin as the engine reads it (a confirmation turns an
-    inference or an unknown origin into ``confirmed``). Empty when the store is missing or older."""
+    """{fact_id: {version_id, content, origin}} of the current versions, id and text from one statement; origin as
+    the engine reads it (a confirmation turns an inference or an unknown origin into ``confirmed``). Empty when the
+    store is missing or older."""
     ids = sorted({int(i) for i in ids if str(i).isdigit()})
     if path is None or not ids or not Path(path).exists():
         return {}
@@ -29,13 +30,13 @@ def facts_state(path: Path | None, ids) -> dict[int, dict]:
             return {}
         marks = ",".join("?" * len(ids))
         origin = "src_origin" if "src_origin" in cols else "null"
-        for fid, vid, org in conn.execute(
-                f"select fact_id, version_id, {origin} from fact_versions where status='current' and fact_id in ({marks})",
-                ids):
-            out[int(fid)] = {"version_id": vid, "origin": org if org in ORIGINS else None}
+        for fid, vid, text, org in conn.execute(
+                f"select fact_id, version_id, content, {origin} from fact_versions "
+                f"where status='current' and fact_id in ({marks})", ids):
+            out[int(fid)] = {"version_id": vid, "content": text, "origin": org if org in ORIGINS else None}
         if _columns(conn, "fact_confirmations"):
             for (fid,) in conn.execute(f"select distinct fact_id from fact_confirmations where fact_id in ({marks})", ids):
-                rec = out.setdefault(int(fid), {"version_id": None, "origin": None})
+                rec = out.setdefault(int(fid), {"version_id": None, "content": None, "origin": None})
                 if rec["origin"] in (None, "inferred"):
                     rec["origin"] = "confirmed"
     except sqlite3.Error:
@@ -43,6 +44,20 @@ def facts_state(path: Path | None, ids) -> dict[int, dict]:
     finally:
         conn.close()
     return out
+
+
+def fact_text(path, fact_id) -> str | None:
+    """The current text of *fact_id*, or None (no store, no such fact)."""
+    if not path or not str(fact_id).isdigit() or not Path(path).exists():
+        return None
+    conn = connect(Path(path))
+    try:
+        row = conn.execute("select content from facts where fact_id = ?", (int(fact_id),)).fetchone()
+        return row[0] if row else None
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
 
 
 def forgotten(path: Path | None) -> set[int]:

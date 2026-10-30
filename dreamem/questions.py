@@ -7,13 +7,13 @@ succeeded) — or ``failed`` (the call was refused: the fact changed since it wa
 The engine's cooldowns follow the answers, not the showing:
 
 - before the next pass, every question of the last night that was not decided has its cooldown mark removed from the
-  engine's state (``dream-seen.json`` buckets, ``dream-asked.json`` for notes), so it is asked again;
-- a night with at least one decision gets a confirmation session in the shadow ``state.db`` naming the decided
+  engine's state (``seen.json`` buckets, ``asked.json`` for notes), so it is asked again;
+- a night with at least one decision is handed to the engine as acknowledged, with an answer naming the decided
   "merge?" numbers (``D-17``) — the engine keeps the marks of an acknowledged night and reopens a merge question whose
-  number the answer does not name; a night with none gets no confirmation, and the engine reopens all of it itself.
+  number the answer does not name; a night with none is not acknowledged, and the engine reopens all of it itself.
 
 An answer never changes memory by itself: it says which memory tool call the agent makes (and what it must check
-first). Only ``reject`` and ``not-duplicates`` write — the engine's reject list, in the shadow home.
+first). Only ``reject`` and ``not-duplicates`` write — the engine's reject list and proposals, in the profile's state.
 """
 from __future__ import annotations
 
@@ -88,6 +88,14 @@ ANSWERS = {
 LATER = "later"  # any section: not now, ask again tomorrow
 
 
+def _same_text(shown, current) -> bool:
+    """Whether a question's text is the current version's: whole, or the engine's cut of it (200 characters); a
+    hidden text (a secret) cannot be compared and passes."""
+    if current is None or not shown or str(shown).startswith("[hidden"):
+        return True
+    return shown == current or (len(shown) >= 200 and current.startswith(shown))
+
+
 def _seen_key(item: dict) -> str:
     return item.get("fingerprint") or engineapi.fingerprint(item.get("content") or "")
 
@@ -104,6 +112,11 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
     def fact_q(section, item, **extra):
         fid = item.get("fact_id")
         state = facts.get(int(fid)) if str(fid).isdigit() else None
+        if state is not None and not _same_text(item.get("content"), state.get("content")):
+            # Changed by another session while the night ran: the version read now is not the text the night
+            # judged. Asked about tomorrow, with the text and the version that go together.
+            skip("changed_during_pass")
+            return
         q = {"section": section, "bucket": BUCKET[section], "seen_key": _seen_key(item), "fact_id": fid,
              "version_id": (state or {}).get("version_id"), "origin": (state or {}).get("origin"),
              "content": item.get("content"), "why": item.get("why"), "store": store}
@@ -151,18 +164,34 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
                    "note": {k: note[k] for k in ("id", "project", "path", "name")}, "content": item.get("entry"),
                    "why": item.get("reason"), "last_mention_days": item.get("last_mention_days")})
     qs.sort(key=lambda q: ORDER.index(q["section"]))
+    # One question about a fact a night: the engine may offer a fact both as "people keep saying it" and as "said again
+    # on different days". The first by ORDER is asked; the other waits (deferred: it comes back if not answered).
+    first_of: dict = {}
+    shown = 0
     for i, q in enumerate(qs, 1):
         q["qid"] = f"Q{i}"
         q["profile"] = profile
-        q["status"] = GENERATED if i <= max_questions else DEFERRED
         q["answer"] = None
+        fid = q.get("fact_id")
+        if fid is not None and fid in first_of:
+            q["status"], q["same_fact_as"] = DEFERRED, first_of[fid]
+            skipped["same_fact"] = skipped.get("same_fact", 0) + 1
+            continue
+        if fid is not None:
+            first_of[fid] = q["qid"]
+        shown += 1
+        q["status"] = GENERATED if shown <= max_questions else DEFERRED
     return qs, skipped
 
 
 # -- between nights ------------------------------------------------------------------------------------------------
 
 
-def reopen_undecided(home: Path, previous: dict | None) -> dict:
+def entry_key(entry: str) -> str:
+    return engineapi.entry_key(entry)
+
+
+def reopen_undecided(state_dir: Path, previous: dict | None) -> dict:
     """Remove the engine's cooldown marks of the last night's questions nobody answered; returns the counts."""
     out = {"seen": 0, "asked": 0}
     if not previous:
@@ -170,7 +199,7 @@ def reopen_undecided(home: Path, previous: dict | None) -> dict:
     open_qs = [q for q in previous.get("questions") or [] if q.get("status") in OPEN]
     if not open_qs:
         return out
-    seen_path, asked_path = home / "cache" / "dream-seen.json", home / "cache" / "dream-asked.json"
+    seen_path, asked_path = state_dir / "seen.json", state_dir / "asked.json"
     seen = read_json(seen_path, {}) or {}
     asked = read_json(asked_path, {}) or {}
     pending = (seen.get("_pending") or {}).get("seen") or {}
@@ -189,12 +218,12 @@ def reopen_undecided(home: Path, previous: dict | None) -> dict:
     return out
 
 
-def ack_for(home: Path, previous: dict | None) -> dict | None:
-    """The confirmation the engine looks for, or None: only for the night the engine last published (its ``_pending``)
-    and only when a person decided at least one of its questions."""
+def acks_for(state_dir: Path, previous: dict | None) -> dict | None:
+    """{generated_at: [answer]} for the engine, or None: only for the night the engine last published (its
+    ``_pending``) and only when a person decided at least one of its questions."""
     if not previous:
         return None
-    pending = (read_json(home / "cache" / "dream-seen.json", {}) or {}).get("_pending") or {}
+    pending = (read_json(state_dir / "seen.json", {}) or {}).get("_pending") or {}
     generated = previous.get("generated_at")
     if not generated or pending.get("generated_at") != generated:
         return None
@@ -206,7 +235,7 @@ def ack_for(home: Path, previous: dict | None) -> dict | None:
     answer = "Answered by the person: " + ", ".join(parts) + "."
     if named:
         answer += " Merge proposals answered: " + ", ".join(named) + "."
-    return {"generated_at": generated, "answer": answer}
+    return {generated: [answer]}
 
 
 # -- the review ----------------------------------------------------------------------------------------------------

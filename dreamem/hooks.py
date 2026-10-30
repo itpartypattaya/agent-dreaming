@@ -22,9 +22,10 @@ from .lock import Lock
 from .paths import Homes
 
 
-def newest_night(summary: dict) -> str:
-    return max((e.get("generated_at") or "" for e in (summary.get("profiles") or {}).values() if isinstance(e, dict)),
-               default="")
+def newest_night(summary: dict) -> float:
+    """When the newest night was published (two nights may share a `generated_at` second)."""
+    return max((float(e.get("published") or 0) for e in (summary.get("profiles") or {}).values()
+                if isinstance(e, dict)), default=0.0)
 
 
 def session_start(homes: Homes, client: str, *, background: bool = False, out=sys.stdout) -> int:
@@ -36,7 +37,7 @@ def session_start(homes: Homes, client: str, *, background: bool = False, out=sy
         summary = read_json(homes.summary, {}) or {}
         night = newest_night(summary)
         shown = summary.get("shown") or {}
-        if shown.get("on") == run.today() and shown.get("night", "") >= night:
+        if shown.get("on") == run.today() and float(shown.get("night") or 0) >= night:
             out.write("{}\n")
             return 0
         line = report.summary_line(summary.get("profiles") or {})

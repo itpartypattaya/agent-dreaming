@@ -46,12 +46,16 @@ def read_json(path: Path, default=None):
 
 
 def remove_partials(folder: Path) -> list[Path]:
-    """Remove what a killed pass left (``*.partial``, and the SQLite sidecars of a shadow database being built)."""
+    """Remove what a killed pass left: files named ``<name>.partial`` in *folder* itself and under its ``profiles``
+    — the only places this package writes — and nothing else, wherever *folder* points."""
     gone = []
     if not folder.is_dir():
         return gone
-    for path in folder.rglob(f"*{PARTIAL}*"):
-        if path.is_file():
+    candidates = list(folder.glob(f"*{PARTIAL}"))
+    if (folder / "profiles").is_dir():
+        candidates += list((folder / "profiles").rglob(f"*{PARTIAL}"))
+    for path in candidates:
+        if path.is_file() and not path.is_symlink():
             try:
                 path.unlink()
                 gone.append(path)

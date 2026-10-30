@@ -1,83 +1,80 @@
-"""The dreaming engine (``dreamem/engine``), two ways.
+"""The dreaming engine (``dreamem/engine/dream.py``), as this package uses it: in process, with every input handed in.
 
-- In process (``module()``): its classifier of secrets and instructions, its harness-envelope rule and its §-entry
-  parser — the same rules the pass applies, applied before anything reaches the shadow home. Importing the engine reads
-  no file of any home (its own promise, ``dream.py`` end of file).
-- As a program (``run_pass``): the night itself, ``dream.py --hermes-home <shadow home>``, in a child process with an
-  environment cleaned of Hermes and dream variables, so nothing of a real Hermes install on the same machine leaks in.
+- Screening: the engine's classifier of secrets and instructions, its harness-envelope rule — the same rules the night
+  applies, applied before anything is kept.
+- The night: ``run_night`` configures the engine for a profile and runs ``dream.night()`` on the person's messages,
+  the memory notes and the profile's state folder. Nothing is written but that folder.
 """
 from __future__ import annotations
 
-import functools
-import importlib.util
-import os
-import subprocess
-import sys
 from pathlib import Path
 
-ENGINE_DIR = Path(__file__).resolve().parent / "engine"
-DREAM = ENGINE_DIR / "dream.py"
-REJECT = ENGINE_DIR / "dream-reject.py"
-# Variables the engine reads; a Hermes install on this machine must not steer our pass.
-_FOREIGN_PREFIXES = ("DREAM_", "HERMES_", "HOLOGRAPHIC_")
+from .engine import dream
 
-
-@functools.lru_cache(maxsize=1)
-def module():
-    spec = importlib.util.spec_from_file_location("_dreamem_engine", DREAM)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
+ENGINE_DIR = Path(dream.__file__).resolve().parent
 
 
 def classify(text: str) -> str | None:
-    """'secret' | 'injection' | None, by the engine's rules and the holographic provider's screen."""
-    return module().classify_unsafe(text or "")
+    """'secret' | 'injection' | None."""
+    return dream.classify_unsafe(text or "")
 
 
 def is_envelope(text: str) -> bool:
-    return bool(module().is_harness_envelope(text or ""))
+    return bool(dream.is_harness_envelope(text or ""))
 
 
 def entry_key(entry: str) -> str:
-    """The key the engine gives a §-entry's "still relevant?" cooldown."""
-    return module()._entry_key(entry)
+    """The key the engine gives a note's "still relevant?" cooldown."""
+    return dream._entry_key(entry)
 
 
 def fingerprint(content: str) -> str:
-    """The key the engine gives a fact's cooldown (``seen`` buckets)."""
-    return module()._fact_fingerprint(content)
+    """The key the engine gives a fact's cooldown (``seen`` buckets) and its reject record."""
+    return dream._fact_fingerprint(content)
 
 
-def parse_entries(path: Path) -> list[str]:
-    """§-entries of a memory file exactly as the engine parses them (entries of 10 characters or less are left out)."""
-    return module().parse_md_entries(str(path))
+def state_files(folder: Path):
+    return dream.state_files(folder)
 
 
-def child_env(home: Path) -> dict:
-    env = {k: v for k, v in os.environ.items() if not k.upper().startswith(_FOREIGN_PREFIXES)}
-    env.update(HERMES_HOME=str(home), PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
-    return env
+def engine_config(*, store: Path | None, settings: dict, tz: str, min_trust: float | None) -> dict:
+    cfg = {"timezone": tz, "fact_source": "holographic" if store is not None else "none",
+           "store": str(store) if store is not None else "",
+           "exclude_patterns": list(settings.get("exclude_patterns") or []),
+           "agent_names": list(settings.get("agent_names") or [])}
+    if min_trust is not None:
+        cfg["gates"] = {"feedback_trust_floor": min_trust}
+    return cfg
 
 
-def run_pass(home: Path, out: Path, *, timeout: float = 900) -> subprocess.CompletedProcess:
-    cmd = [sys.executable, "-I", str(DREAM), "--hermes-home", str(home), "--config", str(home / "dreaming.json"),
-           "--memory-md", str(home / "memories" / "MEMORY.md"), "--out", str(out),
-           "--diary", str(home / "memories" / "DREAMS.md")]
-    return subprocess.run(cmd, env=child_env(home), capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", timeout=timeout, stdin=subprocess.DEVNULL)
+def run_night(*, state_dir: Path, config: dict, notes: list[str], dedupe: list[str], messages: list[dict],
+              acks: dict | None, windows: dict) -> tuple[dict, list[str]]:
+    """(the night's result, the notes as the engine indexed them). Sweeps what was forgotten or merged in the store
+    since the last night out of the state first."""
+    state_dir.mkdir(parents=True, exist_ok=True)
+    dream.configure(config)
+    state = dream.state_files(state_dir)
+    dream.use_state(state)
+    memory = dream.Memory(notes=notes, dedupe=dedupe)
+    if config.get("store"):
+        dream.forget_sweep()
+        dream.merge_sweep()
+    result = dream.night(memory=memory, messages=messages, state=state, acks=acks,
+                         window_days=int(windows.get("themes_days", 14)),
+                         corr_days=int(windows.get("corroboration_days", 30)),
+                         md_decay_days=int(windows.get("md_decay_days", 30)))
+    return result, dream.parse_md_entries(memory)
 
 
-def forget_sweep(home: Path, *, timeout: float = 120) -> subprocess.CompletedProcess:
-    cmd = [sys.executable, "-I", str(DREAM), "--hermes-home", str(home), "--config", str(home / "dreaming.json"),
-           "--memory-md", str(home / "memories" / "MEMORY.md"), "--forget-sweep"]
-    return subprocess.run(cmd, env=child_env(home), capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", timeout=timeout, stdin=subprocess.DEVNULL)
+def forget_sweep(*, state_dir: Path, config: dict) -> dict:
+    dream.configure(config)
+    dream.use_state(dream.state_files(state_dir))
+    return dream.forget_sweep()
 
 
-def reject(home: Path, *args: str, timeout: float = 60) -> subprocess.CompletedProcess:
-    """``dream-reject.py`` on the shadow home: the reject list and the "merge?" proposals live in its cache."""
-    cmd = [sys.executable, "-I", str(REJECT), "--hermes-home", str(home), *args]
-    return subprocess.run(cmd, env=child_env(home), capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", timeout=timeout, stdin=subprocess.DEVNULL)
+def reject(state_dir: Path, fact_id, content: str, reason: str = "") -> str:
+    return dream.reject_fact(dream.state_files(state_dir), fact_id, content, reason)
+
+
+def close_proposal(state_dir: Path, number: str, how: str) -> None:
+    dream.close_proposal(dream.state_files(state_dir), number, how)

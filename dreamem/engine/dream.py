@@ -1,31 +1,20 @@
-#!/usr/bin/env python3
-"""dream.py — read-only nightly "dream" (memory consolidation) for a Hermes agent.
+"""dream.py — the dreaming engine of agent-dreaming: a deterministic, read-only review of an agent's memory.
 
-Phases (in the spirit of OpenClaw dreaming):
-  light — load facts (memory_store.db) and human messages (state.db) for the
-          corroboration window
-  rem   — recurring themes from conversations, decayed facts, stale entries of
-          MEMORY.md, possible contradictions between candidates and memory
-  deep  — score facts with corroboration from real conversations → candidates
-          for durable memory (MEMORY.md / USER.md)
+The caller hands everything in (``night()``): the person's messages, the memory notes, the fact store's path, the
+answers given to the previous night, the state files. The engine reads the fact store read-only and writes only its
+own state files; it reads no environment variable, no config file and no agent home of its own.
 
-Corroboration: for every fact / memory entry we count in how many DIFFERENT
-days human messages actually mention it (by signature tokens). That gives an
-honest query_diversity, strengthens frequency/consolidation and "recency by
-mention" — without patching the core and without a query log.
+Phases:
+  light — facts of the store and the person's messages of the corroboration window
+  rem   — recurring themes, facts nobody uses, notes nobody mentions, conflicts between facts and memory
+  deep  — score facts by corroboration in real conversations; duplicates across the store
 
-IMPORTANT: the script never writes to runtime MEMORY.md / USER.md. It emits JSON
-and appends only the dream diary; justified promotions and profile facts are
-applied by the agent through the regular `memory` tool.
-
-Everything installation-specific (trusted chats, alias rules, agent names,
-timezone, diary heading, …) lives in a JSON config — see `load_config()` and
-`examples/dreaming.example.json`. Precedence: CLI flag > env var > config > default.
+Corroboration: for every fact and memory note we count on how many DIFFERENT days the person's messages actually
+mention it (by signature tokens and stems) — an honest query diversity, frequency and "recency by mention" without
+a query log.
 """
 from __future__ import annotations
-import argparse
 import bisect
-import contextlib
 import contextvars
 import copy
 import functools
@@ -36,17 +25,14 @@ import json
 import math
 import os
 import re
-import shutil
 import sqlite3
 import sys
-import tempfile
 import time
 import types
 import unicodedata
 from array import array
 from collections import Counter, defaultdict, namedtuple
 from datetime import datetime, timedelta, timezone
-from fractions import Fraction
 from pathlib import Path
 
 try:  # Python 3.9+
@@ -54,73 +40,26 @@ try:  # Python 3.9+
 except ImportError:  # pragma: no cover
     ZoneInfo = None
 
-HOME = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
-
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-ALWAYS_UNTRUSTED_SOURCES = ("cron", "subagent", "tool")
-
 DEFAULT_CONFIG = {
     # IANA timezone for the diary date and for bucketing messages into "days".
-    # Without it a 03:00 local dream would be filed under yesterday's UTC date.
     "timezone": "UTC",
-    # Only humans corroborate memory. Group chats must be listed here explicitly
-    # (fail-closed: an empty list means NO group chat corroborates); private
-    # chats and legacy sessions without chat_id are trusted by default; cron
-    # sessions are never trusted (their role=user rows are job prompts).
-    "trusted_chat_ids": [],
-    "trust_private_chats": True,
-    "trust_sessions_without_chat": True,
-    # Session sources whose role=user rows are machine prompts, not speech.
-    # `cron` is always here (a job's own prompt corroborated facts before this
-    # existed). Add `cli` when scripts drive the agent non-interactively — a
-    # nightly "summarize this git diff" prompt is otherwise read as family talk,
-    # and the diff's vocabulary becomes the top "emerging theme".
-    # Machine-paced sources never count as human speech. Hermes itself groups
-    # cron, subagent and tool runs that way (MACHINE_PACED_SOURCES), and a
-    # subagent brief looks exactly like a person talking — same wording, same
-    # role=user rows (external review, 2026-10-07).
-    "untrusted_sources": ["cron", "subagent", "tool"],  # always included, see configure()
     # Regexes; a message whose text matches any of them never corroborates.
-    # For machine text that carries no source of its own — bridge briefs
-    # ("via to-mia"), bot digests, forwarded reports — which land in whatever
-    # thread their author used, so `excluded_threads` cannot catch them.
     "exclude_patterns": [],
-    # Threads (forum topics) of a TRUSTED chat that must NOT corroborate:
-    # {"<chat_id>": ["<thread_id>", …]}. A trusted chat is trusted as a whole,
-    # but an agent's own alerts, machine-generated cards and assistant bridges
-    # usually live in their own threads there; their vocabulary drowns real human
-    # talk in emerging themes and wakes the extraction gate for nothing. Absent
-    # key = previous behaviour; a thread that is not listed stays trusted.
-    "excluded_threads": {},
     # Names the agent is addressed by — pure noise for corroboration.
     "agent_names": [],
-    # Extra stopwords on top of the built-in RU/EN lists.
+    # Extra stopwords on top of the built-in lists.
     "extra_stopwords": [],
-    # Minimal token length: ASCII/Latin tokens vs everything else (Cyrillic
-    # inflection makes short tokens noisy).
+    # Minimal token length: ASCII/Latin tokens vs everything else (Cyrillic inflection makes short tokens noisy).
     "token_min_len": {"latin": 4, "other": 5},
-    # Files that already are durable memory (dedupe target). Relative paths are
-    # resolved against HERMES_HOME. `--memory-md` is always included.
-    "durable_memory_paths": ["memories/MEMORY.md", "memories/USER.md"],
-    # Where candidate facts come from: "holographic" (the Hermes holographic
-    # memory provider), "sqlite" / "jsonl" (your own export, mapped by
-    # `fact_table` / `fact_columns`) or "none" (memory files only).
+    # "holographic": facts come from a holographic-memory store (`store`); "none": the memory notes alone.
     "fact_source": "holographic",
-    # Where the fact store lives. Empty = (holographic) ask Hermes:
-    # `plugins.hermes-memory-store.db_path` from config.yaml, else
-    # $HERMES_HOME/memory_store.db; generic sources must set it. Relative paths
-    # resolve against HERMES_HOME.
-    "fact_store_path": "",
-    # Generic sources only: the table and the names of your columns / keys.
-    # Required: id, content. Optional: created_at, updated_at (ISO or epoch),
-    # category, tags (string or list), trust (0..1).
-    "fact_table": "facts",
-    "fact_columns": {},
-    # Word stems that hint a fact is about the user / household (profile
-    # candidates for USER.md). Categories are matched exactly.
+    # The fact store's path — the very database the memory tools of a session open.
+    "store": "",
+    # Word stems that hint a fact is about the person / household. Categories are matched exactly.
     "profile_hint_terms": ["prefer", "likes", "dislikes", "goal", "plans", "works", "lives",
                            "family", "spouse", "partner", "child", "daughter", "son",
                            "предпочита", "любит", "не любит", "цель", "планирует",
@@ -128,128 +67,38 @@ DEFAULT_CONFIG = {
     "profile_categories": ["user", "user_pref", "preference", "profile", "personal", "family"],
     # Declarative near-duplicate rules (see `_semantic_memory_alias`).
     "alias_rules": [],
-    # Where the diary lives (relative to HERMES_HOME). It was hard-wired in the
-    # gate, so an install that keeps its memories elsewhere got a second
-    # DREAMS.md next to the first one (external review, 2026-10-07).
-    "diary": {"heading": "## Dream", "keep_sections": 90, "path": "memories/DREAMS.md"},
-    "windows": {"themes_days": 14, "corroboration_days": 60, "md_decay_days": 60},
-    # Promotions used to repeat every night by design ("until written"). With
-    # an approval gate in the way, or a budget that cut them off, that meant the
-    # same wake-up forever — hence a short rest, much shorter than the 14 days
-    # of the other sections.
-    # A fact a human rejected keeps its trust in the store, so the provider's
-    # prefetch goes on injecting it into ordinary turns — the rejection taught
-    # the dream, not the retrieval. `trust_feedback` offers the agent the one
-    # call that fixes that (`fact_feedback unhelpful`, -0.10 trust; below
-    # `feedback_trust_floor` the fact leaves search and prefetch).
-    # The floor is the PROVIDER's, not ours: holographic recalls nothing below
-    # its `min_trust_threshold` (its own default 0.3, and its meaning search
-    # applies the same floor). Set here only to override it — unset, the pass
-    # reads the provider's value, so a store tuned to 0.5 is not offered facts
-    # retrieval already ignores, and the nightly report names the real number.
+    "diary": {"heading": "## Dream", "keep_sections": 90},
+    # A short rest for a promotion just shown; a fact a human rejected keeps its trust in the store, and
+    # `trust_feedback` offers the one call that teaches recall (`memory_feedback unhelpful`). The floor is the
+    # store's own `min_trust_threshold` (0.3 by default): below it recall ignores the fact.
     "gates": {"min_score": 0.55, "min_mentions": 3, "new_facts_cap": 30,
               "promotion_cooldown_days": 3,
-              # None = ask the provider (its `min_trust_threshold`), else 0.3.
               "feedback_trust_floor": None, "feedback_cap": 5,
               "seen_cooldown_days": 14, "md_ask_cooldown_days": 14,
-              # A §-entry that survived a "still relevant?" question — kept as is
-              # past md_ask_cooldown_days, or rewritten in place — counts as
-              # confirmed and is not asked about again for this long.
+              # A note that survived a "still relevant?" question is not asked about again for this long.
               "md_confirmed_cooldown_days": 90,
               "publish_cap": 15},
     "weights": {"relevance": 0.30, "frequency": 0.24, "query_diversity": 0.15,
                 "recency": 0.15, "consolidation": 0.10, "conceptual_richness": 0.06},
-    # Optional char limits of the durable files (as in Hermes `memory.*_char_limit`)
-    # — reported as fill level so the agent knows when to merge before adding.
-    "memory_char_limits": {},
-    # Markers of pinned §-entries in MEMORY.md: never flagged as stale.
+    # Markers of pinned notes: never flagged as stale.
     "pinned_markers": ["📌", "[pinned]"],
-    # Probes: phrases that must stay in the durable memory files ("allergic to peanuts"). The loss guard below
-    # catches a mass loss; one entry merged away while memory was being tidied at its limit is under its threshold.
-    # A probe that disappears raises one alert (and one more if it comes back and goes again).
+    # Phrases that must stay in memory; one that disappears raises an alert.
     "probes": [],
-    # A rejected fact (dream-reject.py) is asked about once more when the rejection is older than this many days
-    # and the fact was said again after it (a new store row and a human mention since); 0 = never.
+    # A rejected fact is asked about once more when the rejection is older than this and it was said again since.
     "reject_reask_days": 180,
-    # Loss guard: the pass snapshots the durable files; if on the next pass more
-    # than this fraction of yesterday's entries is gone, an alert is raised
-    # (a bad LLM turn or a wrong `memory replace` — never silent).
+    # Loss guard: more than this share of yesterday's notes gone raises an alert.
     "memory_loss_alert_fraction": 0.25,
-    # Writes waiting for a human (`memory.write_approval: true` in Hermes).
-    # A staged write answers "success, staged" to the agent but does not change
-    # MEMORY.md, so without this the same candidate woke the agent every night
-    # and piled up new pending files (external review, 2026-10-07).
-    "pending": {"dir": "pending/memory", "alert_min": 5, "alert_days": 7},
-    # Keywords for the fact store (holographic >= 0.6.0): words a person might
-    # ask with that a fact does not contain — synonyms, other roots,
-    # translations. The provider keeps them in `tags` after a "keywords: " line
-    # and searches them like text. With `enabled` the pass lists facts that have
-    # none (`keywords_needed`, at most `cap` a night) and the extraction run is
-    # asked to give them at `add`. Off by default: an older provider ignores the
-    # parameter, and the same facts would come back forever. Turn it on with
-    # holographic >= 0.6.1 — 0.6.0 stamped a fact "changed now" when it got
-    # keywords, and old facts came back as new ones.
+    # Facts without keywords (`memory_update keywords`): off — a write the person did not ask for.
     "keywords": {"enabled": False, "cap": 10},
-    # Duplicates across the whole fact store (3.4.0, holographic >= 0.19.0): the pass looks for pairs of facts
-    # that say the same thing in other words and asks the human "merge?" — one question a night (`per_night`),
-    # with the whole texts and a proposal number (`D-17`). The agent merges only on a "yes" to that number,
-    # through `fact_store merge` with the versions the human saw; the pass itself writes nothing to the store.
-    # `min_containment`: the share of the shorter side's significant words the other side holds (0.7);
-    # `question_cooldown_days`: a pair asked about rests this long (180); `max_pair_checks`: the night's budget
-    # of candidate pairs (200 000) — past it the section is skipped for the night, with an alert; `max_chars`:
-    # a fact longer than this takes no part (2000). See references/scoring.md, "Duplicates across the store".
+    # Duplicates across the whole store: one "merge?" question a night with both texts whole and a number (`D-17`);
+    # the merge is made by the agent on a "yes" to that number, with the versions the person saw.
     "duplicates": {"enabled": True, "min_containment": 0.7, "per_night": 1, "question_cooldown_days": 180,
                    "max_pair_checks": 200000, "max_chars": 2000},
-    # What one pass keeps of what it read from the window's messages (3.7.1), in MiB, estimated on the high side:
-    # past it the parts cheapest to read again are let go and read again when a fact needs them — slower, the same
-    # decisions. 256 holds about twice what a busy 60-day window of 16.8 MiB needs (an estimated 138) and is a few per
-    # cent of an 8 GB machine; lower it on a small one, raise it for a larger window when the night is slow. See
-    # references/scoring.md, "Each message is read once a pass".
+    # What one pass keeps of what it read from the window's messages, in MiB (see references/scoring.md).
     "corroboration": {"memory_mb": 256},
-    # holographic `scope: user / chat / thread` keeps facts in one database per user / chat / topic, which the
-    # dream does not read by default: one chat's facts would reach memory every chat sees. `read` lists every
-    # such database in the report (counts only — no text, no ids); `promote_from` names the chats whose facts
-    # join the pass like the shared store's — "<platform>:<chat id>", "<platform>:<chat id>:<thread id>" with
-    # scope thread, "<platform>:<user id>" with scope user, or the database's file name. Their facts are
-    # corroborated only by messages of their own chat (or user), and their messages corroborate nothing else.
-    "chat_stores": {"read": False, "promote_from": []},
-    # An optional cloud judge (3.3.0), off by default: a decision model is asked whether a counted mention really
-    # confirms the fact, and may take it out of the count — never add one. `shadow` only reports what it would
-    # change; `veto` applies it. What may leave the machine is listed here and nothing else: `send_from` —
-    # "trusted" (the trusted group chats and, with trust_private_chats, private chats) or a list of chat ids;
-    # `send_sources` — the session sources (e.g. "telegram"); `send_fact_stores` — promoted chat stores whose
-    # facts' text may be sent (as in chat_stores.promote_from); `send_no_chat_sessions` — sessions without a chat.
-    # Only the fact's text and the person's own words are sent (no reply quote, link, id, sender or time) — to
-    # OpenRouter (model Jev by TypeSafe) and, listed second, to OpenAI as the fallback. Keys: OPENROUTER_API_KEY /
-    # OPENAI_API_KEY in the environment or in $HERMES_HOME/.env. `max_cost_usd` is a soft cap per night.
-    "judge": {"mode": "off", "providers": ["jev"], "tau": 0.5, "send_from": [], "send_sources": [],
-              "send_fact_stores": [], "send_no_chat_sessions": False, "max_attempts": 250, "max_cost_usd": 0.05},
-    "state": {"asked": "cache/dream-asked.json",
-              "rejected": "cache/dream-rejected.json",
-              "seen": "cache/dream-seen.json",
-              "snapshot": "cache/dream-snapshot.json",
-              # holographic >= 0.8.0 `forget`: which tombstones were swept, and
-              # hashes of the diary previews of every fact (old lines carry no id).
-              "forget_sweep": "cache/dream-forget-sweep.json",
-              "diary_index": "cache/dream-diary-index.json",
-              # The judge's (3.3.0): its verdicts (hashes, no text), the pairs it sent (text, 90 days), its health,
-              # and the key of a review sample (`--judge-export`).
-              "judge_cache": "cache/dream-judge.json",
-              "judge_journal": "cache/dream-judge-journal.jsonl",
-              "judge_health": "cache/dream-judge-health.json",
-              "judge_manifest": "cache/dream-judge-export-manifest.json",
-              # The "merge?" proposals of 3.4.0 (`D-17`): the texts and versions the human was shown, their
-              # status, the number counter (kept in the seen state too: a number is never given twice).
-              "proposals": "cache/dream-proposals.json"},
-    "precheck": {"max_content": 300,
-                 "actionable_keys": ["new_facts_reviewed", "promotions", "fact_decays",
-                                     "md_decays", "conflicts", "quarantined", "alerts",
-                                     "duplicate_pairs_published"]},
 }
 
-
-def config_path():
-    return os.environ.get("DREAM_CONFIG") or os.path.join(HOME, "dreaming.json")
+_UTC_NAMES = {"utc", "etc/utc", "gmt", "etc/gmt", "z", "zulu", "universal", "etc/universal"}
 
 
 def _deep_merge(base, override):
@@ -262,508 +111,30 @@ def _deep_merge(base, override):
     return out
 
 
-def load_config(path=None):
-    """Read the JSON config; missing file → defaults, broken JSON → warning + defaults."""
-    path = path or config_path()
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            raise ValueError("config root must be an object")
-    except FileNotFoundError:
-        data = {}
-    except (OSError, ValueError) as e:
-        print(f"[dream] warn: config {path} ignored: {e}", file=sys.stderr)
-        data = {}
-    merged = _deep_merge(DEFAULT_CONFIG, data)
-    # Keys the file does not mention are taken from Hermes itself, not guessed:
-    # the example ships the CORE defaults (2200/1375), and on an install with
-    # raised limits that produced "memory at 285%" every night. An explicit
-    # value — even one equal to the default — stays untouched; only absence
-    # delegates (external review, 2026-10-07).
-    if "timezone" not in data:
-        hermes_tz = (_hermes_config() or {}).get("timezone")
-        if hermes_tz:
-            merged["timezone"] = str(hermes_tz)
-    if "memory_char_limits" not in data:
-        if "memory" in hermes_config_unread():
-            print("[dream] note: memory: of config.yaml cannot be read for sure — char limits not taken from it",
-                  file=sys.stderr)
-        hermes_mem = hermes_memory_settings()
-        limits = {name: int(value) for name, value in
-                  (("memories/MEMORY.md", hermes_mem.get("memory_char_limit")),
-                   ("memories/USER.md", hermes_mem.get("user_char_limit")))
-                  if _a_char_limit(value)}
-        if limits:
-            merged["memory_char_limits"] = limits
-            print(f"[dream] note: char limits taken from config.yaml: {limits}", file=sys.stderr)
-    return merged
-
-
-def config_problem(path=None):
-    """Why dreaming.json cannot be used, in one line, or None — None also when there is no file (the defaults are the
-    documented answer to that). `load_config` still reads past a broken file with a warning, for `--dry-run`,
-    `--explain` and `install.py --check`; the nightly pass and the extraction gate stop on it instead: run on the
-    defaults, a stray comma emptied `trusted_chat_ids`, and the night asked up to 15 "still relevant?" questions
-    and moved the extraction cursor past every group message (review of 2.9.8)."""
-    path = path or config_path()
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError) as exc:
-        return f"config {path} cannot be used ({type(exc).__name__}: {exc})"
-    if not isinstance(data, dict):
-        return f"config {path} cannot be used (its root is a {type(data).__name__}, not an object)"
-    return None
-
-
-def _a_char_limit(value):
-    """A memory char limit worth taking from config.yaml: a positive finite number. Not a bool — `true` is an int
-    to Python and was a limit of one character, "memory at 100000%" (third review of 2.9.6, Codex) — and not
-    `.inf` / `.nan`, which PyYAML gives as floats and `int()` refuses (review of the 2.9.7 branch, Codex: a huge int
-    made `math.isfinite()` overflow), and not a fraction below one, which `int()` makes 0 — no limit at all (third
-    review of the branch, Codex)."""
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, int):
-        return value > 0  # not through float(): a 400-digit int is finite, and math.isfinite() overflowed on it
-    return isinstance(value, float) and math.isfinite(value) and int(value) > 0
-
-
-def _hermes_config_text(home=None):
-    """Hermes config.yaml as text; "" when there is none, None when it is there but cannot be read (not UTF-8, no
-    permission). The two differ: no file is a fresh install with the defaults, an unreadable one is a config this
-    pass cannot see, and its settings count as unread (third review of the 2.9.7 branch, Codex: a stray non-UTF-8
-    byte in a comment pointed the pass at the default database). Only FileNotFoundError is "none": a file that
-    cannot even be looked at may not say it exists (fourth review of the 2.9.7 branch, Codex)."""
-    try:
-        with open(os.path.join(home or HOME, "config.yaml"), encoding="utf-8") as f:
-            return f.read()
-    except FileNotFoundError:
-        return ""
-    except (OSError, UnicodeDecodeError):
-        return None
-
-
-def _hermes_config_parsed(home=None):
-    """(Hermes config.yaml as a dict, parsed) — `parsed` is True when PyYAML read the file.
-
-    The flag is what the plugin-setting reader needs: once YAML has read the file, its answer
-    is the truth, and "the key is not there" must stay "not there" instead of falling through
-    to a line scanner that cannot tell `store.key` from `store.something.key`."""
-    text = _hermes_config_text(home)
-    if not text:
-        return {}, False
-    try:
-        import yaml  # type: ignore
-    except Exception:  # noqa: BLE001 — no PyYAML: the scanner below is the only reader
-        return {}, False
-    try:
-        data = yaml.safe_load(text)
-    except Exception:  # noqa: BLE001 — a file YAML cannot parse: let the scanner try
-        return {}, False
-    return (data if isinstance(data, dict) else {}), True
-
-
-def _hermes_config(home=None):
-    """Hermes config.yaml as a dict: PyYAML's, or without it (or on a parse error) the top-level scalars the
-    scanner reads (`_scan_block`) — a nested block is None there. Callers must degrade gracefully: the pass never
-    requires a dependency. Before 2.9.7 there was no fallback, so without PyYAML `timezone` was never read and
-    the pass ran on UTC."""
-    data, parsed = _hermes_config_parsed(home)
-    return data if parsed else (_scan_block(_hermes_config_text(home) or "", ()) or {})
-
-
-_MEMORY_KEYS = ("memory_char_limit", "user_char_limit", "provider", "write_approval")
-
-
-def hermes_enabled(value):
-    """A Hermes on/off setting as Hermes reads it (`tools/write_approval._normalize_enabled`): a YAML bool as it
-    is, a string among on / true / yes / 1 / approve / enabled, anything else — a number, null — off."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"on", "true", "yes", "1", "approve", "enabled"}
-    return False
-
-
-def hermes_memory_settings(home=None):
-    """`memory:` of Hermes config.yaml — the limits and the provider that decide
-    what the dream can see and what counts as "memory is filling up".
-
-    The defaults shipped in the example config are the CORE defaults (2200 and
-    1375), so an install that raised its limits got "memory at 285%" and a
-    nightly order to merge and drop entries (external review, 2026-10-07). The
-    numbers live in one place; read them from there.
-
-    Once PyYAML has read the file its answer is final, an empty one too: a `memory:`
-    without these keys, or not a mapping, is "not set" and does not fall through to
-    the scanner (review of 2.9.6, Codex: a second `memory:` block, which YAML keeps,
-    had the scanner read the first). `write_approval` comes back as a bool. A block the scanner cannot read for
-    sure gives {} — no provider, so the extraction gate stays shut; `hermes_config_unread` says why."""
-    data, parsed = _hermes_config_parsed(home)
-    if parsed:
-        mem = data.get("memory")
-    else:
-        text = _hermes_config_text(home)
-        mem = None if text is None else _scan_block(text, ("memory",))
-    out = {key: mem[key] for key in _MEMORY_KEYS if key in mem} if isinstance(mem, dict) else {}
-    if "write_approval" in out:
-        out["write_approval"] = hermes_enabled(out["write_approval"])
-    return out
-
-
-def hermes_config_unread(home=None):
-    """The blocks of Hermes config.yaml the dream relies on — "memory", "plugins.hermes-memory-store" — that the
-    scanner cannot read for sure (`_scan_block` gives None), or all of them when the file is there but cannot be
-    read; () when PyYAML read the file or there is none. Such a block is not taken as empty: the extraction gate
-    stays shut, the pass reads no facts unless `fact_store_path` names the store, `install.py --check` says so."""
-    text = _hermes_config_text(home)
-    if text is None:
-        return ("memory", ".".join(_STORE))
-    if not text or _hermes_config_parsed(home)[1]:
-        return ()
-    return tuple(".".join(p) for p in (("memory",), _STORE) if _scan_block(text, p) is None)
-
-
-_STORE = ("plugins", "hermes-memory-store")
-
-
-def _load_yaml_scanner(path=None):
-    """dream_yaml.py next to this file — the reader of config.yaml without PyYAML (`_scan_block`) — or None. A
-    missing or broken copy must not take the pass down: with PyYAML the scanner is never asked, and without it
-    every block it would read counts as unread (`_scan_block` gives None), which keeps the gates shut."""
-    path = path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "dream_yaml.py")
-    try:
-        spec = importlib.util.spec_from_file_location("_dream_yaml", path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return mod
-    except Exception as exc:  # noqa: BLE001 — see the docstring
-        print(f"[dream] warn: {path} not loaded ({exc!r}) — without PyYAML config.yaml counts as unread",
-              file=sys.stderr)
-        return None
-
-
-_YAML_SCANNER = _load_yaml_scanner()
-if _YAML_SCANNER is not None:
-    # the scanner's names dream.py and the tests use as dream.<name>
-    _scan_block, _plain = _YAML_SCANNER._scan_block, _YAML_SCANNER._plain
-    _UNREAD, _Unsure = _YAML_SCANNER._UNREAD, _YAML_SCANNER._Unsure
-else:
-    def _scan_block(text, path):
-        return None
-
-
-def _hermes_plugin_setting(key, home=None):
-    """`plugins.hermes-memory-store.<key>` from Hermes config.yaml as a string, or None.
-    Read with PyYAML when available, else a narrow line scanner — the pass must
-    not grow a dependency for a few keys."""
-    text = _hermes_config_text(home)
-    if not text:
-        return None
-    data, parsed = _hermes_config_parsed(home)
-    if parsed:
-        # YAML read the file, so its answer is final: a key that is absent, nested deeper
-        # (`store.diagnostics.key`) or not a scalar is "unset" — it must not fall through to the
-        # scanner, which would find the nested one (Codex review of 2.7.1). A mapping is the
-        # plugin's shape; anything else (a list, a bare string after a wrong indent) is "unset",
-        # not a crash of the whole night (review 2026-10-13).
-        plugins = data.get("plugins")
-        store = plugins.get("hermes-memory-store") if isinstance(plugins, dict) else None
-        value = store.get(key) if isinstance(store, dict) else None
-        if value is None or value == "" or isinstance(value, (dict, list)):
-            return None
-        return str(value)
-    return _scan_plugin_setting(text, key)
-
-
-def _scan_plugin_setting(text, key):
-    """`plugins.hermes-memory-store.<key>` by the scanner (`_scan_block`) when PyYAML is missing or failed, as a
-    string like the YAML path gives, or None. Only a direct child of `hermes-memory-store` counts, a one-line flow
-    mapping (`hermes-memory-store: {scope: chat}`) is read, and a comment anywhere no longer ends `plugins:` or
-    the store's block — it did until 2.9.7, and `db_path`, `scope`, `cron_writes` and `min_trust_threshold`
-    after one fell back to their defaults: the pass read another database and said nothing of a split scope."""
-    value = (_scan_block(text, _STORE) or {}).get(key)
-    if value is None or value == "" or isinstance(value, (dict, list)):
-        return None
-    return str(value)
-
-
-def _hermes_plugin_db_path(home=None):
-    """`plugins.hermes-memory-store.db_path` from Hermes config.yaml, or None."""
-    return _hermes_plugin_setting("db_path", home)
-
-
-# holographic `scope` values that keep facts in separate files (holographic-users/, holographic-chats/) next to
-# `db_path`. With them the shared store the dream reads gets nothing: chats write to their own files, and a cron
-# job — no chat, no user — reads and writes nothing at all, so the extraction job stores nothing either.
-SPLIT_SCOPES = {"user": "user", "chat": "chat", "thread": "forum topic"}
-
-
-def fact_store_note(home=None):
-    """Why the holographic fact store the dream reads cannot fill up, in one sentence, or None.
-
-    Said in the report, the diary and `install.py --check`, and the extraction gate stops on it: the pass itself
-    still works (the memory-file review needs no facts), but promotions stay empty for a reason the user should
-    know — not because nothing was said (external review, 2026-10-13)."""
-    if fact_source() != "holographic":
-        return None
-    if ".".join(_STORE) in hermes_config_unread(home):
-        why = ("plugins.hermes-memory-store of config.yaml cannot be read for sure (the file is not readable "
-               "UTF-8, or PyYAML is missing or refuses it and the block has a form the fallback reader does not take)")
-        fix = ("run with Hermes' own Python (it has PyYAML), or write the block in plain `key: value` lines")
-        if os.environ.get("DREAM_FACT_STORE") or SETTINGS.CONFIG.get("fact_store_path"):
-            # the store named in dreaming.json is read (third review of the 2.9.7 branch, Codex: the note said
-            # otherwise); scope and cron_writes stay unknown
-            return (f"{why} — the dream reads the store fact_store_path names, but cannot tell its scope and "
-                    f"cron_writes, so the extraction job stays asleep; {fix}")
-        return (f"{why} — the dream reads no facts and the extraction job stays asleep rather than guess the "
-                f"database, scope and cron_writes; {fix}")
-    scope = holographic_scope(home)
-    if scope in SPLIT_SCOPES:
-        read, keys = chat_stores_settings()
-        if read or keys:
-            return (f"holographic runs with scope: {scope} — the dream reads the databases per {SPLIT_SCOPES[scope]} "
-                    f"through chat_stores ({'an overview of all, ' if read else ''}facts of {len(keys)} listed "
-                    "promoted); a cron job writes nothing, so the extraction job stays asleep")
-        return (f"holographic runs with scope: {scope} — facts go to a separate database per {SPLIT_SCOPES[scope]}, "
-                "which the dream does not read (it would carry one chat's facts into memory every chat sees), and a "
-                "cron job writes nothing, so the shared store stays as it is; the memory-file review still works. "
-                "Set fact_source to 'none' to make this explicit")
-    cron_writes = (_hermes_plugin_setting("cron_writes", home) or "").strip().lower()
-    if cron_writes in ("false", "no", "off", "0"):
-        return ("holographic cron_writes is false — the extraction job cannot store candidate facts, so only facts "
-                "the agent saves in ordinary turns reach the dream")
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Per-chat / per-user fact stores (holographic scope: user / chat / thread)
-# ---------------------------------------------------------------------------
-# The databases sit next to `db_path`: holographic-users/<key>.db (scope user) or holographic-chats/<key>.db
-# (chat, thread). Read-only, like the shared store. Only `promote_from` stores give facts to the pass; their ids
-# become "<key>#<id>" — never mistaken for a shared-store id, and a fact_store call with one fails instead of
-# touching another fact (a cron session cannot reach a chat's database anyway).
-CHAT_STORE_DIRS = {"user": "holographic-users", "chat": "holographic-chats", "thread": "holographic-chats"}
-FACT_ID_RE = re.compile(r"(?:[A-Za-z0-9_.-]+#)?\d+")
-
-
-def holographic_min_trust(home=None):
-    """`plugins.hermes-memory-store.min_trust_threshold` as a float, or None.
-
-    The trust below which holographic stops recalling a fact at all — words,
-    structure and meaning alike. Unset, unreadable or not a number → None, and
-    the caller keeps its own default: a config we cannot parse must not silently
-    turn `trust_feedback` into "offer everything"."""
-    raw = _hermes_plugin_setting("min_trust_threshold", home)
-    if raw is None or str(raw).strip() == "":
-        return None
-    try:
-        value = float(str(raw).strip())
-    except (TypeError, ValueError):
-        return None
-    return value if 0.0 <= value <= 1.0 else None
-
-
-def holographic_scope(home=None):
-    """`plugins.hermes-memory-store.scope` of Hermes config.yaml, lower case; "profile" when unset."""
-    return (_hermes_plugin_setting("scope", home) or "profile").strip().lower()
-
-
-def store_key(platform, ident, thread=None):
-    """The file stem holographic gives the store of a chat / thread / user — its `_safe_part`, verbatim."""
-    value = f"{platform or 'unknown'}-{ident}" + (f"-t{thread}" if thread else "")
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", value)[:60]
-    return safe if safe == value else f"{safe}-{hashlib.sha256(value.encode()).hexdigest()[:10]}"
-
-
-def _promote_key(raw):
-    """"telegram:-100123" / "telegram:-100123:42" → the store key; a file name or key passes as it is."""
-    raw = str(raw or "").strip()
-    if raw.endswith(".db"):
-        raw = raw[:-3]
-    parts = raw.split(":")
-    if len(parts) in (2, 3) and parts[0] and parts[1]:
-        return store_key(parts[0], parts[1], parts[2] if len(parts) == 3 and parts[2] else None)
-    return raw
-
-
-def chat_stores_settings():
-    """(read, {promoted store keys}) of the `chat_stores` config."""
-    cfg = SETTINGS.CONFIG.get("chat_stores") or {}
-    if not isinstance(cfg, dict):
-        return False, set()
-    keys = {_promote_key(r) for r in (cfg.get("promote_from") or []) if str(r or "").strip()}
-    return cfg.get("read") is True, keys
-
-
-def chat_store_dir(home=None):
-    """(folder of the per-chat / per-user databases, scope), or (None, scope) when there is none to read."""
-    scope = holographic_scope(home)
-    if fact_source() != "holographic" or scope not in CHAT_STORE_DIRS:
-        return None, scope
-    base = fact_store_path(home)
-    return (os.path.join(os.path.dirname(base), CHAT_STORE_DIRS[scope]) if base else None), scope
-
-
-def list_chat_stores(home=None):
-    """{store key: path} of the per-chat / per-user databases, sorted by key."""
-    folder, _scope = chat_store_dir(home)
-    if not folder or not os.path.isdir(folder):
-        return {}
-    return {n[:-3]: os.path.join(folder, n) for n in sorted(os.listdir(folder)) if n.endswith(".db")}
-
-
-def load_chat_facts(home=None):
-    """Facts of the `promote_from` stores: ids "<key>#<id>", each with `store`. A store that cannot be read is
-    skipped with a warning — the rest of the pass goes on."""
-    _read, keys = chat_stores_settings()
-    if not keys:
-        return []
-    stores = list_chat_stores(home)
-    out = []
-    for key in sorted(keys & set(stores)):
-        try:
-            rows = _load_holographic(stores[key])
-        except sqlite3.Error as exc:
-            print(f"[dream] warn: chat store {key} unreadable: {exc}", file=sys.stderr)
-            continue
-        for row in rows:
-            row["fact_id"] = f"{key}#{row['fact_id']}"
-            row["store"] = key
-            out.append(row)
-    return out
-
-
-def load_all_facts(home=None):
-    """The shared store's facts and those of the promoted chat stores."""
-    return load_facts() + load_chat_facts(home)
-
-
-def chat_stores_overview(window_days, home=None):
-    """What every per-chat / per-user database holds — counts only, never text or ids: `read` shows all of them,
-    otherwise only the promoted ones. None when `chat_stores` is off."""
-    read, keys = chat_stores_settings()
-    if not read and not keys:
-        return None
-    folder, scope = chat_store_dir(home)
-    if not folder:
-        return {"scope": scope, "stores": [], "missing": sorted(keys),
-                "note": "holographic scope is not user / chat / thread — there are no per-chat databases"}
-    stores = list_chat_stores(home)
-    # Counted by SQL: a farm may hold thousands of databases, and the overview must not read their texts.
-    cutoff = (_now() - timedelta(days=window_days)).strftime("%Y-%m-%d %H:%M:%S")
-    rows = []
-    for key, path in stores.items():
-        if not read and key not in keys:
-            continue
-        try:
-            c = _conn(path)
-            try:
-                total, new = c.execute("select count(*), coalesce(sum(created_at > ?), 0) from facts",
-                                       (cutoff,)).fetchone()
-            finally:
-                c.close()
-        except sqlite3.Error:
-            rows.append({"store": key, "error": "unreadable", "promote": key in keys})
-            continue
-        rows.append({"store": key, "facts": total, "new": new, "promote": key in keys})
-    return {"scope": scope, "stores": rows, "missing": sorted(keys - set(stores))}
-
-
-def _message_store(source, chat_id, thread_id, user_id, scope):
-    """The store key the turn of a message wrote to, under *scope*; None without a chat (or user)."""
-    # The plugin strips the ids before they become a file name (`_user_key`, `_chat_key`); so must this.
-    if scope == "user":
-        user = str(user_id or "").strip()
-        return store_key(source, user) if user else None
-    chat = str(chat_id or "").strip()
-    if not chat:
-        return None
-    thread = str(thread_id or "").strip() if scope == "thread" else ""
-    return store_key(source, chat, thread or None)
-
-
-def _own_store_message(source, chat_id, thread_id):
-    """A message of a promoted chat that the trust rules leave out still corroborates its own chat's facts —
-    unless it is machine speech or from an excluded thread."""
-    if (source or "") in SETTINGS.UNTRUSTED_SOURCES:
-        return False
-    tid, cid = str(thread_id or ""), str(chat_id or "")
-    return not (tid and tid in SETTINGS.EXCLUDED_THREADS.get(cid, ()))
+FACT_ID_RE = re.compile(r"\d+")
+FACT_SOURCES = ("holographic", "none")
 
 
 def messages_for(fact, messages, by_store=None):
-    """The messages that may corroborate *fact*: its own store's for a chat-store fact, the trusted ones else."""
-    store = fact.get("store")
-    if by_store is not None:
-        return by_store.get(store, []) if store else by_store.get(None, [])
-    if store:
-        return [m for m in messages if m.get("store") == store]
-    return [m for m in messages if not m.get("own_only")]
+    """The messages that may corroborate *fact* (one pool: the person's own words)."""
+    return by_store.get(None, []) if by_store is not None else messages
 
 
 def messages_by_store(messages):
-    """{store key: its messages, None: the trusted messages} for messages_for()."""
-    out = {None: [m for m in messages if not m.get("own_only")]}
-    for m in messages:
-        if m.get("store"):
-            out.setdefault(m["store"], []).append(m)
-    return out
-
-
-FACT_SOURCES = ("holographic", "none", "sqlite", "jsonl")
+    return {None: list(messages)}
 
 
 def fact_source():
-    """Where candidate facts come from: `$DREAM_FACT_SOURCE` > dreaming.json
-    `fact_source` > `holographic`. An unknown value is an error, not a silent
-    "none": a typo must not quietly turn the dream into a memory-file checker."""
-    raw = os.environ.get("DREAM_FACT_SOURCE") or SETTINGS.CONFIG.get("fact_source") or "holographic"
-    src = str(raw).strip().lower()
+    src = str(SETTINGS.CONFIG.get("fact_source") or "holographic").strip().lower()
     if src not in FACT_SOURCES:
-        raise ValueError(f"fact_source {raw!r} is not one of {', '.join(FACT_SOURCES)}")
+        raise ValueError(f"fact_source {src!r} is not one of {', '.join(FACT_SOURCES)}")
     return src
 
 
-def fact_store_path(home=None):
-    """Resolved path of the fact store: `$DREAM_FACT_STORE` > dreaming.json
-    `fact_store_path` > (holographic only) Hermes `plugins.hermes-memory-store.db_path`
-    > `$HERMES_HOME/memory_store.db`. `$HERMES_HOME`, `~` and relative paths are
-    expanded the way the provider does it — an install that moved its store
-    must not look empty to the dream. A generic source (`sqlite`, `jsonl`) has
-    no default: None until `fact_store_path` is set. None too for holographic when
-    the store's block cannot be read for sure (`hermes_config_unread`): the default
-    database is a guess, maybe another one."""
-    home = home or HOME
-    raw = os.environ.get("DREAM_FACT_STORE") or SETTINGS.CONFIG.get("fact_store_path")
-    if not raw:
-        if fact_source() != "holographic" or ".".join(_STORE) in hermes_config_unread(home):
-            return None
-        raw = _hermes_plugin_db_path(home) or "memory_store.db"
-    raw = str(raw).replace("${HERMES_HOME}", home).replace("$HERMES_HOME", home)
-    raw = os.path.expanduser(raw)
-    return raw if os.path.isabs(raw) else os.path.join(home, raw)
-
-
-def provider_store_path(home=None):
-    """The database holographic opens as the profile store, resolved as the provider resolves it — `db_path` of
-    its block (default `$HERMES_HOME/memory_store.db`), `$HERMES_HOME` replaced, `~` expanded — and spelled as its
-    `fact_store stats` gives it (`database`); or None when that cannot be known here: the block cannot be read for
-    sure, the path keeps another variable (the core expands it, this pass does not), it is `:memory:`, or it is
-    relative (the provider opens it from the gateway's working directory, not from the home)."""
-    home = home or HOME
-    if ".".join(_STORE) in hermes_config_unread(home):
-        return None
-    raw = _hermes_plugin_db_path(home) or "$HERMES_HOME/memory_store.db"
-    raw = str(raw).replace("${HERMES_HOME}", home).replace("$HERMES_HOME", home)
-    if raw.strip() == ":memory:" or "$" in raw:
-        return None
-    raw = os.path.expanduser(raw)
-    return str(Path(raw)) if os.path.isabs(raw) else None
+def fact_store_path():
+    """The fact store's path, or None (no store: the notes alone)."""
+    raw = SETTINGS.CONFIG.get("store")
+    return str(raw) if raw and fact_source() == "holographic" else None
 
 
 def same_file(a, b):
@@ -778,60 +149,6 @@ def same_file(a, b):
     return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
 
 
-def _env(name, default, cast=str):
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    try:
-        return cast(raw)
-    except (TypeError, ValueError):
-        # `DREAM_MIN_SCORE=0,6` used to look applied (review of 3.3.1).
-        print(f"[dream] warn: ${name}={raw!r} ignored (not {cast.__name__}) — {default!r} used", file=sys.stderr)
-        return default
-
-
-def _ignored(key, value, default):
-    """`default`, with a warning naming the config value it replaces: a bad number used to fall back in silence."""
-    print(f"[dream] warn: {key}={value!r} in dreaming.json ignored — {default!r} used", file=sys.stderr)
-    return default
-
-
-def _trust_switch(cfg, key):
-    """A trust switch of dreaming.json: true / false only. Anything else trusts nothing — `"false"` as a string
-    turned trust ON (review of 3.3.1)."""
-    value = cfg.get(key, True)
-    return value if isinstance(value, bool) else _ignored(key, value, False)
-
-
-def _parse_excluded_threads(env_value, cfg_value):
-    """``{chat_id: {thread_id, …}}`` from ``DREAM_EXCLUDED_THREADS``
-    ("chat:thread,chat:thread") or from the config mapping. A malformed entry is
-    dropped, never raised: a typo here must not take the nightly pass down."""
-    out = {}
-    if env_value is not None:
-        for pair in env_value.split(","):
-            chat, _, thread = pair.partition(":")
-            chat, thread = chat.strip(), thread.strip()
-            if chat and thread:
-                out.setdefault(chat, set()).add(thread)
-        return out
-    if not isinstance(cfg_value, dict):
-        return out
-    for chat, threads in cfg_value.items():
-        chat = str(chat).strip()
-        if not chat or not isinstance(threads, (list, tuple, set)):
-            continue
-        ids = {str(t).strip() for t in threads if str(t).strip()}
-        if ids:
-            out[chat] = ids
-    return out
-
-
-# UTC by any of its names needs no zone database: without the `tzdata` package (Windows, slim containers) zoneinfo
-# knows no names at all, and the default "UTC" was reported as an unknown zone on every run.
-_UTC_NAMES = {"utc", "etc/utc", "gmt", "etc/gmt", "z", "zulu", "universal", "etc/universal"}
-
-
 def _tz(name):
     if not name or str(name).strip().lower() in _UTC_NAMES:
         return timezone.utc
@@ -839,101 +156,22 @@ def _tz(name):
         try:
             return ZoneInfo(name)
         except Exception:  # noqa: BLE001 — unknown zone → UTC with a warning
-            hint = ""
-            try:
-                import zoneinfo
-                if not zoneinfo.available_timezones():
-                    hint = " (this Python has no zone database: pip install tzdata)"
-            except Exception:  # noqa: BLE001 — the hint is optional
-                pass
-            print(f"[dream] warn: unknown timezone {name!r}, using UTC{hint}", file=sys.stderr)
+            print(f"[dream] warn: unknown timezone {name!r}, using UTC (is tzdata installed?)", file=sys.stderr)
     return timezone.utc
 
 
-# The effective settings, one object. Before 3.0 they were 41 module globals that configure() set one by one
-# through a 12-line `global` list, and every function read them implicitly. Now configure() builds a whole
-# Settings and swaps it in; code reads `SETTINGS.MIN_SCORE`, so where a value comes from is visible. `dream.MIN_SCORE` still reads (module __getattr__ at the end of the file — gates of an
-# older install read `dream.LOCAL_TZ`, `dream.CONFIG`), but writing it raises: it would change nothing the pass
-# reads. Change a setting through configure(), or on SETTINGS in a test.
+# The effective settings, one object: configure() builds a whole Settings and swaps it in; code reads
+# `SETTINGS.MIN_SCORE`, so where a value comes from is visible.
 _SETTING_NAMES = (
     "CONFIG", "LOCAL_TZ", "WEIGHTS", "MIN_SCORE", "MIN_MENTIONS", "NEW_FACTS_CAP", "PUBLISH_CAP",
-    "MD_ASK_COOLDOWN_DAYS", "MD_CONFIRMED_COOLDOWN_DAYS", "SEEN_COOLDOWN_DAYS",
-    "TRUSTED_CHAT_IDS", "TRUST_PRIVATE",
-    "TRUST_NO_CHAT", "EXCLUDED_THREADS", "UNTRUSTED_SOURCES", "EXCLUDE_PATTERNS",
+    "MD_ASK_COOLDOWN_DAYS", "MD_CONFIRMED_COOLDOWN_DAYS", "SEEN_COOLDOWN_DAYS", "EXCLUDE_PATTERNS",
     "STOPWORDS", "TOKEN_MIN_LATIN", "TOKEN_MIN_OTHER", "ALIAS_RULES",
-    "PROFILE_HINT_RE", "PROFILE_CATEGORIES", "DIARY_HEADING", "DIARY_SECTION_RE",
-    "DIARY_KEEP_SECTIONS", "DURABLE_MEMORY_PATHS", "MEMORY_CHAR_LIMITS",
-    "PINNED_MARKERS", "PROBES", "REJECT_REASK_DAYS", "MEMORY_LOSS_ALERT_FRACTION", "DIARY_PATH",
-    "PROMOTION_COOLDOWN_DAYS", "PENDING_DIR", "PENDING_ALERT_MIN", "PENDING_ALERT_DAYS",
-    "FEEDBACK_TRUST_FLOOR", "FEEDBACK_CAP", "KEYWORDS_ENABLED", "KEYWORDS_CAP",
-    "FEEDBACK_FLOOR_EXPLICIT", "JUDGE",
+    "PROFILE_HINT_RE", "PROFILE_CATEGORIES", "DIARY_HEADING", "DIARY_SECTION_RE", "DIARY_KEEP_SECTIONS",
+    "PINNED_MARKERS", "PROBES", "REJECT_REASK_DAYS", "MEMORY_LOSS_ALERT_FRACTION",
+    "PROMOTION_COOLDOWN_DAYS", "FEEDBACK_TRUST_FLOOR", "FEEDBACK_CAP", "KEYWORDS_ENABLED", "KEYWORDS_CAP",
     "DUP_ENABLED", "DUP_MIN_CONTAINMENT", "DUP_PER_NIGHT", "DUP_COOLDOWN_DAYS", "DUP_MAX_PAIR_CHECKS",
     "DUP_MAX_CHARS", "PASS_MEMORY_MB",
 )
-
-
-JUDGE_MODES = ("off", "shadow", "veto")
-# The names only: dream_judge.py holds the endpoints and is not loaded while the judge is off.
-JUDGE_PROVIDERS = ("jev", "openai")
-# Phase 0 measured the judge down to 0.50; below it a veto rests on answers nobody checked.
-JUDGE_MIN_TAU = 0.5
-JudgeSettings = namedtuple("JudgeSettings", "mode providers tau send_trusted send_from send_sources "
-                                            "send_fact_stores send_no_chat_sessions max_attempts max_cost_usd problem")
-
-
-def _plain_number(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
-
-
-def judge_settings(raw):
-    """The JudgeSettings of a `judge` section (3.3.0). The schema is strict: a section it does not understand turns
-    the judge off, and `problem` says why — nothing is sent on a guess."""
-    def off(why):
-        return JudgeSettings("off", ("jev",), 0.5, False, frozenset(), frozenset(), frozenset(), False, 0, 0.0,
-                             f"judge: {why}")
-
-    if not isinstance(raw, dict):
-        return off("the section is not an object")
-    unknown = sorted(set(raw) - set(DEFAULT_CONFIG["judge"]))
-    if unknown:
-        return off(f"unknown key(s) {', '.join(map(str, unknown))}")
-    mode = raw.get("mode", "off")
-    if mode not in JUDGE_MODES:
-        return off(f"mode {mode!r} is not one of {', '.join(JUDGE_MODES)}")
-    providers = raw.get("providers")
-    if (not isinstance(providers, list) or not providers or len(set(map(str, providers))) != len(providers)
-            or any(p not in JUDGE_PROVIDERS for p in providers)):
-        return off(f"providers must list {' and / or '.join(JUDGE_PROVIDERS)}, each once (the first is asked first)")
-    tau = raw.get("tau", 0.5)
-    if not _plain_number(tau) or not JUDGE_MIN_TAU <= tau <= 1:
-        return off(f"tau must be a number from {JUDGE_MIN_TAU} to 1")
-    send_from = raw.get("send_from", [])
-    if send_from == "trusted":
-        trusted, chats = True, frozenset()
-    elif isinstance(send_from, list) and all(
-            (isinstance(c, str) and c.strip()) or (isinstance(c, int) and not isinstance(c, bool)) for c in send_from):
-        trusted, chats = False, frozenset(str(c).strip() for c in send_from)
-    else:
-        return off('send_from must be "trusted" or a list of chat ids')
-    names = {}
-    for key in ("send_sources", "send_fact_stores"):
-        value = raw.get(key, [])
-        if not isinstance(value, list) or not all(isinstance(v, str) and v.strip() for v in value):
-            return off(f"{key} must be a list of names")
-        names[key] = value
-    no_chat = raw.get("send_no_chat_sessions", False)
-    if not isinstance(no_chat, bool):
-        return off("send_no_chat_sessions must be true or false")
-    attempts = raw.get("max_attempts", 250)
-    if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
-        return off("max_attempts must be a whole number, 0 or more")
-    cost = raw.get("max_cost_usd", 0.05)
-    if not _plain_number(cost) or cost < 0:
-        return off("max_cost_usd must be a number, 0 or more")
-    return JudgeSettings(mode, tuple(providers), float(tau), trusted, chats,
-                         frozenset(v.strip() for v in names["send_sources"]),
-                         frozenset(_promote_key(v) for v in names["send_fact_stores"]), no_chat, attempts,
-                         float(cost), None)
 
 
 class Settings:
@@ -945,107 +183,54 @@ class Settings:
 SETTINGS_GENERATION = 0  # bumped by configure(): what is cached by the settings is cached by this
 
 
+def _number(cfg, key, default, cast, low=None, high=None):
+    """One setting, one parse: a bad value falls back to its default with a warning and touches nothing else."""
+    raw = cfg.get(key, default)
+    try:
+        value = cast(raw)
+        if isinstance(raw, bool) or value != value or (low is not None and value < low) \
+                or (high is not None and value > high):
+            raise ValueError(raw)
+        return value
+    except (TypeError, ValueError):
+        print(f"[dream] warn: {key}={raw!r} ignored — {default!r} used", file=sys.stderr)
+        return default
+
+
 def configure(cfg):
-    """Build the Settings of `cfg` (a merged config, see load_config()) and make them the module's. The whole
+    """Build the Settings of *cfg* (DEFAULT_CONFIG merged with the caller's) and make them the module's. The whole
     object is swapped in at the end: a config that fails half-way leaves the previous settings as they were."""
     global SETTINGS, SETTINGS_GENERATION
+    cfg = _deep_merge(DEFAULT_CONFIG, cfg or {})
     s = Settings()
     s.CONFIG = cfg
-    # A timezone the config does not mention is filled in by load_config()
-    # from Hermes' own config.yaml, so here it is simply used.
-    s.LOCAL_TZ = _tz(_env("DREAM_TIMEZONE", cfg.get("timezone")))
+    s.LOCAL_TZ = _tz(cfg.get("timezone"))
     s.WEIGHTS = dict(DEFAULT_CONFIG["weights"], **(cfg.get("weights") or {}))
     gates = cfg.get("gates") or {}
-    s.MIN_SCORE = _env("DREAM_MIN_SCORE", float(gates.get("min_score", 0.55)), float)
-    s.MIN_MENTIONS = _env("DREAM_MIN_MENTIONS", int(gates.get("min_mentions", 3)), int)
-    s.NEW_FACTS_CAP = _env("DREAM_NEW_FACTS_CAP", int(gates.get("new_facts_cap", 30)), int)
-    s.PUBLISH_CAP = int(gates.get("publish_cap", 15))
-    s.MD_ASK_COOLDOWN_DAYS = _env("DREAM_MD_ASK_COOLDOWN_DAYS",
-                                int(gates.get("md_ask_cooldown_days", 14)), int)
-    s.MD_CONFIRMED_COOLDOWN_DAYS = _env("DREAM_MD_CONFIRMED_COOLDOWN_DAYS",
-                                      int(gates.get("md_confirmed_cooldown_days", 90)), int)
-    s.PROMOTION_COOLDOWN_DAYS = _env("DREAM_PROMOTION_COOLDOWN_DAYS",
-                                   int(gates.get("promotion_cooldown_days", 3)), int)
-    # Two settings, two parses: a bad cap used to reset the floor too, and an explicit
-    # override silently became the provider's value (Codex review of 2.7.1).
-    raw_floor = gates.get("feedback_trust_floor")
-    try:
-        s.FEEDBACK_TRUST_FLOOR = 0.3 if raw_floor is None else float(raw_floor)
-        if not 0.0 <= s.FEEDBACK_TRUST_FLOOR <= 1.0:
-            raise ValueError(raw_floor)
-    except (TypeError, ValueError):
-        s.FEEDBACK_TRUST_FLOOR, raw_floor = 0.3, None  # unusable override = no override
-    try:
-        s.FEEDBACK_CAP = int(gates.get("feedback_cap", 5))
-    except (TypeError, ValueError):
-        s.FEEDBACK_CAP = _ignored("feedback_cap", gates.get("feedback_cap"), 5)
-    # Whether the floor above is a deliberate override. Unset, `feedback_floor()`
-    # asks the provider instead of guessing (resolved lazily: one config read per
-    # run, and only for the holographic source).
-    s.FEEDBACK_FLOOR_EXPLICIT = raw_floor is not None
+    s.MIN_SCORE = _number(gates, "min_score", 0.55, float, 0.0, 1.0)
+    s.MIN_MENTIONS = _number(gates, "min_mentions", 3, int, 1)
+    s.NEW_FACTS_CAP = _number(gates, "new_facts_cap", 30, int, 0)
+    s.PUBLISH_CAP = _number(gates, "publish_cap", 15, int, 1)
+    s.MD_ASK_COOLDOWN_DAYS = _number(gates, "md_ask_cooldown_days", 14, int, 0)
+    s.MD_CONFIRMED_COOLDOWN_DAYS = _number(gates, "md_confirmed_cooldown_days", 90, int, 0)
+    s.PROMOTION_COOLDOWN_DAYS = _number(gates, "promotion_cooldown_days", 3, int, 0)
+    s.SEEN_COOLDOWN_DAYS = _number(gates, "seen_cooldown_days", 14, int, 0)
+    floor = gates.get("feedback_trust_floor")
+    s.FEEDBACK_TRUST_FLOOR = 0.3 if floor is None else _number(gates, "feedback_trust_floor", 0.3, float, 0.0, 1.0)
+    s.FEEDBACK_CAP = _number(gates, "feedback_cap", 5, int, 0)
     kw = cfg.get("keywords") if isinstance(cfg.get("keywords"), dict) else {}
     s.KEYWORDS_ENABLED = kw.get("enabled") is True
-    try:
-        s.KEYWORDS_CAP = max(0, int(kw.get("cap", 10)))
-    except (TypeError, ValueError):
-        s.KEYWORDS_CAP = _ignored("keywords.cap", kw.get("cap"), 10)
+    s.KEYWORDS_CAP = _number(kw, "cap", 10, int, 0)
     dup = cfg.get("duplicates") if isinstance(cfg.get("duplicates"), dict) else {}
-    s.DUP_ENABLED = dup.get("enabled", True) is not False
     defaults = DEFAULT_CONFIG["duplicates"]
-    # One setting, one parse: a bad `per_night` must not reset the containment too.
-    for name, key, cast, low in (("DUP_MIN_CONTAINMENT", "min_containment", float, 0.0),
-                                 ("DUP_PER_NIGHT", "per_night", int, 0),
-                                 ("DUP_COOLDOWN_DAYS", "question_cooldown_days", int, 0),
-                                 ("DUP_MAX_PAIR_CHECKS", "max_pair_checks", int, 1),
-                                 ("DUP_MAX_CHARS", "max_chars", int, 1)):
-        raw = dup.get(key, defaults[key])
-        try:
-            value = cast(raw)
-            if value < low or (key == "min_containment" and value > 1.0) or value != value:
-                raise ValueError(raw)
-        except (TypeError, ValueError):
-            value = _ignored(f"duplicates.{key}", raw, defaults[key])
-        setattr(s, name, value)
+    s.DUP_ENABLED = dup.get("enabled", True) is not False
+    s.DUP_MIN_CONTAINMENT = _number(dup, "min_containment", defaults["min_containment"], float, 0.0, 1.0)
+    s.DUP_PER_NIGHT = _number(dup, "per_night", defaults["per_night"], int, 0)
+    s.DUP_COOLDOWN_DAYS = _number(dup, "question_cooldown_days", defaults["question_cooldown_days"], int, 0)
+    s.DUP_MAX_PAIR_CHECKS = _number(dup, "max_pair_checks", defaults["max_pair_checks"], int, 1)
+    s.DUP_MAX_CHARS = _number(dup, "max_chars", defaults["max_chars"], int, 1)
     corr = cfg.get("corroboration") if isinstance(cfg.get("corroboration"), dict) else {}
-    raw = corr.get("memory_mb", DEFAULT_CONFIG["corroboration"]["memory_mb"])
-    try:
-        s.PASS_MEMORY_MB = float(raw)
-        if isinstance(raw, bool) or not 1 <= s.PASS_MEMORY_MB < float("inf"):
-            raise ValueError(raw)
-    except (TypeError, ValueError):
-        s.PASS_MEMORY_MB = _ignored("corroboration.memory_mb", raw, DEFAULT_CONFIG["corroboration"]["memory_mb"])
-    pend = cfg.get("pending") or {}
-    s.PENDING_DIR = str(pend.get("dir") or "pending/memory")
-    # Two settings, two parses — a bad `alert_days` reset a good `alert_min` too (review of 3.3.1).
-    try:
-        s.PENDING_ALERT_MIN = int(pend.get("alert_min", 5))
-    except (TypeError, ValueError):
-        s.PENDING_ALERT_MIN = _ignored("pending.alert_min", pend.get("alert_min"), 5)
-    try:
-        s.PENDING_ALERT_DAYS = int(pend.get("alert_days", 7))
-    except (TypeError, ValueError):
-        s.PENDING_ALERT_DAYS = _ignored("pending.alert_days", pend.get("alert_days"), 7)
-    s.SEEN_COOLDOWN_DAYS = _env("DREAM_SEEN_COOLDOWN_DAYS",
-                              int(gates.get("seen_cooldown_days", 14)), int)
-    env_chats = os.environ.get("DREAM_TRUSTED_CHAT_IDS")
-    if env_chats is None:  # legacy name kept for existing installs
-        env_chats = os.environ.get("DREAM_FAMILY_CHAT_IDS")
-    if env_chats is not None:
-        s.TRUSTED_CHAT_IDS = {c.strip() for c in env_chats.split(",") if c.strip()}
-    else:
-        s.TRUSTED_CHAT_IDS = {str(c).strip() for c in (cfg.get("trusted_chat_ids") or []) if str(c).strip()}
-    s.TRUST_PRIVATE = _trust_switch(cfg, "trust_private_chats")
-    s.TRUST_NO_CHAT = _trust_switch(cfg, "trust_sessions_without_chat")
-    s.EXCLUDED_THREADS = _parse_excluded_threads(
-        os.environ.get("DREAM_EXCLUDED_THREADS"), cfg.get("excluded_threads"))
-    env_sources = os.environ.get("DREAM_UNTRUSTED_SOURCES")
-    raw_sources = (env_sources.split(",") if env_sources is not None
-                   else (cfg.get("untrusted_sources") or []))
-    # Machine-paced sources are not configurable away: a job prompt, a subagent
-    # brief and a tool-driven turn are never speech. A list in dreaming.json
-    # replaces the default instead of extending it, and the shipped example once
-    # listed only `cron` (Codex review of 2.7.2, 2026-10-14).
-    s.UNTRUSTED_SOURCES = set(ALWAYS_UNTRUSTED_SOURCES) | {str(s).strip() for s in raw_sources if str(s).strip()}
+    s.PASS_MEMORY_MB = _number(corr, "memory_mb", 256, float, 1.0, 1e9)
     s.EXCLUDE_PATTERNS = []
     for pat in (cfg.get("exclude_patterns") or []):
         try:
@@ -1056,8 +241,8 @@ def configure(cfg):
     s.STOPWORDS |= {_norm(w) for w in (cfg.get("agent_names") or []) if w}
     s.STOPWORDS |= {_norm(w) for w in (cfg.get("extra_stopwords") or []) if w}
     tml = cfg.get("token_min_len") or {}
-    s.TOKEN_MIN_LATIN = int(tml.get("latin", 4))
-    s.TOKEN_MIN_OTHER = int(tml.get("other", 5))
+    s.TOKEN_MIN_LATIN = _number(tml, "latin", 4, int, 1)
+    s.TOKEN_MIN_OTHER = _number(tml, "other", 5, int, 1)
     s.ALIAS_RULES = [r for r in (cfg.get("alias_rules") or []) if isinstance(r, dict)]
     terms = [t for t in (cfg.get("profile_hint_terms") or []) if t]
     s.PROFILE_HINT_RE = re.compile(
@@ -1066,42 +251,14 @@ def configure(cfg):
     s.PROFILE_CATEGORIES = {_norm(c) for c in (cfg.get("profile_categories") or [])}
     diary = cfg.get("diary") or {}
     s.DIARY_HEADING = str(diary.get("heading") or "## Dream").strip()
-    s.DIARY_SECTION_RE = re.compile(rf"^{re.escape(s.DIARY_HEADING)} \d{{4}}-\d{{2}}-\d{{2}}",
-                                  re.MULTILINE)
-    s.DIARY_KEEP_SECTIONS = _env("DREAM_DIARY_KEEP", int(diary.get("keep_sections", 90)), int)
-    s.DIARY_PATH = str(diary.get("path") or "memories/DREAMS.md")
-    s.DURABLE_MEMORY_PATHS = list(cfg.get("durable_memory_paths") or [])
-    s.MEMORY_CHAR_LIMITS = dict(cfg.get("memory_char_limits") or {})
+    s.DIARY_SECTION_RE = re.compile(rf"^{re.escape(s.DIARY_HEADING)} \d{{4}}-\d{{2}}-\d{{2}}", re.MULTILINE)
+    s.DIARY_KEEP_SECTIONS = _number(diary, "keep_sections", 90, int, 1)
     s.PINNED_MARKERS = [str(m) for m in (cfg.get("pinned_markers") or []) if m]
     s.PROBES = [str(m).strip() for m in (cfg.get("probes") or []) if str(m or "").strip()]
-    try:
-        s.REJECT_REASK_DAYS = max(0, int(cfg.get("reject_reask_days", 180)))
-    except (TypeError, ValueError):
-        s.REJECT_REASK_DAYS = _ignored("reject_reask_days", cfg.get("reject_reask_days"), 180)
-    # A share of the entries: above 1 the guard never fires, and NaN compares false with everything.
-    raw_fraction = cfg.get("memory_loss_alert_fraction", 0.25)
-    try:
-        s.MEMORY_LOSS_ALERT_FRACTION = float(raw_fraction)
-        if not 0.0 < s.MEMORY_LOSS_ALERT_FRACTION <= 1.0:
-            raise ValueError(raw_fraction)
-    except (TypeError, ValueError):
-        s.MEMORY_LOSS_ALERT_FRACTION = _ignored("memory_loss_alert_fraction", raw_fraction, 0.25)
-    s.JUDGE = judge_settings(cfg.get("judge"))
-    if s.JUDGE.problem:
-        print(f"[dream] warn: {s.JUDGE.problem} — the cloud judge is off", file=sys.stderr)
+    s.REJECT_REASK_DAYS = _number(cfg, "reject_reask_days", 180, int, 0)
+    s.MEMORY_LOSS_ALERT_FRACTION = _number(cfg, "memory_loss_alert_fraction", 0.25, float, 0.01, 1.0)
     SETTINGS = s
     SETTINGS_GENERATION += 1
-
-
-def load_for_home(home, cfg_path=None):
-    """Point this module at a Hermes home and apply that home's config — the one call every loader of dream.py
-    makes after `exec_module` (the CLI, install.py, the extraction gate, dream-reject.py, the tests). Two steps
-    by hand, `HOME = …` then `configure(load_config())`, let a loader forget the second and read the config and
-    fact store of another home (dream-reject.py did until 3.0). `cfg_path` as `--config`: $DREAM_CONFIG or
-    `<home>/dreaming.json` when None. The import itself reads no file: the module starts on the defaults."""
-    global HOME
-    HOME = str(home)
-    configure(load_config(cfg_path))
 
 
 # Threshold of stemmed containment above which a rewording counts as the same
@@ -1129,7 +286,8 @@ _LANG = _load_lang()
 
 
 def _conn(path):
-    return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    """The fact store, read-only (a URI, so a path with '#' or '?' in it is still a path)."""
+    return sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True, timeout=5)
 
 
 def _now():
@@ -1349,40 +507,14 @@ def _missing_db(db, what):
 
 FACT_FIELDS = ["fact_id", "content", "category", "tags", "trust_score", "retrieval_count",
                "helpful_count", "created_at", "updated_at"]
-# Generic sources (`sqlite`, `jsonl`): column / key names of the user's own
-# store. Only `id` and `content` are required; a missing optional field gets the
-# neutral value the holographic store would have (trust 0.5, no retrievals) —
-# the score is then carried by corroboration, as it mostly is anyway.
-DEFAULT_FACT_COLUMNS = {"id": "id", "content": "content", "created_at": "created_at",
-                        "updated_at": "updated_at", "category": "category", "tags": "tags",
-                        "trust": "trust"}
 
 
 def load_facts(db=None):
-    """Facts of the configured source (`fact_source`) as dicts with FACT_FIELDS.
-
-    `holographic` — the Hermes holographic provider's SQLite `facts` table;
-    `sqlite` — any SQLite table, columns mapped by `fact_columns`;
-    `jsonl` — one JSON object per line, keys mapped the same way;
-    `none` — no fact store: the dream works on the memory files alone.
-    Every store is opened read-only. `db` forces the holographic schema at that
-    path (tests and old callers)."""
-    src = "holographic" if db else fact_source()
-    if src == "none":
-        return []
+    """Facts of the holographic-memory store as dicts with FACT_FIELDS, read-only; [] without a store."""
     path = db or fact_store_path()
-    if not path:
-        why = ("plugins.hermes-memory-store of config.yaml cannot be read for sure" if src == "holographic"
-               else "fact_store_path is not set")
-        print(f"[dream] note: fact_source={src} but {why} — no facts", file=sys.stderr)
+    if not path or _missing_db(path, "treating the fact store as empty"):
         return []
-    if _missing_db(path, "treating the fact store as empty"):
-        return []
-    if src == "holographic":
-        return _load_holographic(path)
-    cols = dict(DEFAULT_FACT_COLUMNS, **(SETTINGS.CONFIG.get("fact_columns") or {}))
-    raw = _load_generic_sqlite(path, cols) if src == "sqlite" else _load_jsonl(path, cols)
-    return [f for f in (_normalize_fact(r, cols) for r in raw) if f]
+    return _load_holographic(path)
 
 
 def _load_holographic(db):
@@ -1443,82 +575,6 @@ def split_keywords(tags):
     return head, [w.strip() for w in tail.split(",") if w.strip()]
 
 
-_SQL_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-def _load_generic_sqlite(db, cols):
-    table = str(SETTINGS.CONFIG.get("fact_table") or "facts")
-    if not _SQL_NAME_RE.match(table):
-        raise ValueError(f"fact_table {table!r} is not a plain SQL name")
-    c = _conn(db)
-    try:
-        have = {r[1] for r in c.execute(f'pragma table_info("{table}")')}
-        if not have:
-            raise ValueError(f"table {table!r} not found in {db}")
-        for need in ("id", "content"):
-            if cols[need] not in have:
-                raise ValueError(f"column {cols[need]!r} ({need}) not in table {table!r}")
-        names = [n for n in dict.fromkeys(cols.values()) if n in have]
-        cur = c.execute("select " + ",".join(f'"{n}"' for n in names) + f' from "{table}"')
-        return [dict(zip(names, r)) for r in cur]
-    finally:
-        c.close()
-
-
-def _load_jsonl(path, cols):
-    out = []
-    with open(path, encoding="utf-8") as f:
-        for n, line in enumerate(f, 1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except ValueError:
-                print(f"[dream] warn: {path}:{n} is not JSON — skipped", file=sys.stderr)
-                continue
-            if isinstance(obj, dict):
-                out.append(obj)
-    return out
-
-
-def _ts_text(v):
-    """A timestamp in the holographic text form ('YYYY-MM-DD HH:MM:SS', UTC)
-    from epoch seconds / milliseconds or an ISO string with any offset."""
-    if v is None or v == "":
-        return None
-    if isinstance(v, (int, float)) and not isinstance(v, bool):
-        sec = v / 1000 if v > 1e11 else v
-        return datetime.fromtimestamp(sec, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    s = str(v).strip()
-    try:
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except ValueError:
-        return s  # leave it to _parse_ts; an unparsable date only weakens recency
-    if dt.tzinfo:
-        dt = dt.astimezone(timezone.utc)
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _normalize_fact(r, cols):
-    content = r.get(cols["content"])
-    fid = r.get(cols["id"])
-    if not isinstance(content, str) or not content.strip() or fid in (None, ""):
-        return None
-    tags = r.get(cols["tags"])
-    if isinstance(tags, (list, tuple)):
-        tags = ",".join(str(t) for t in tags)
-    trust = r.get(cols["trust"])
-    try:
-        trust = float(trust) if trust is not None else 0.5
-    except (TypeError, ValueError):
-        trust = 0.5
-    created = _ts_text(r.get(cols["created_at"]))
-    return {"fact_id": fid, "content": content, "category": r.get(cols["category"]),
-            "tags": tags or "", "trust_score": trust, "retrieval_count": 0, "helpful_count": 0,
-            "created_at": created, "updated_at": _ts_text(r.get(cols["updated_at"])) or created}
-
-
 def _table_columns(conn, table):
     """Column names of `table` ([] when it does not exist). The query is built
     from this instead of catching OperationalError three times over."""
@@ -1528,144 +584,30 @@ def _table_columns(conn, table):
         return set()
 
 
-def _trusted_message(source, chat_type, chat_id, thread_id=None):
-    """Only humans corroborate memory: no machine-driven sources, no group chats
-    outside the trusted list (fail-closed), no excluded threads of a trusted
-    chat, private/legacy sessions per config.
-
-    ``thread_id`` is optional on purpose: callers on a schema without threads
-    (and older embedders) keep working, and an unknown thread is treated as
-    "not excluded" — the chat-level decision stands."""
-    if (source or "") in SETTINGS.UNTRUSTED_SOURCES:
-        return False
-    ctype = (chat_type or "")
-    cid = str(chat_id or "")
-    if cid and cid in SETTINGS.TRUSTED_CHAT_IDS:
-        tid = str(thread_id or "")
-        return not (tid and tid in SETTINGS.EXCLUDED_THREADS.get(cid, ()))
-    if ctype in ("group", "supergroup", "channel", "forum"):
-        return False
-    if ctype in ("dm", "private"):
-        return SETTINGS.TRUST_PRIVATE
-    if not ctype and not cid:
-        return SETTINGS.TRUST_NO_CHAT
-    # Unknown chat type with an id that is not trusted — be conservative.
-    return SETTINGS.TRUST_PRIVATE if not cid else False
-
-
 def _day_of(ts):
     return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(SETTINGS.LOCAL_TZ).strftime("%Y-%m-%d")
 
 
-def load_messages(db, days):
-    """Human messages (user + observed) for `days`, with tokens and local day. None when state.db is there but busy
-    or locked right now: "nobody said anything" ([]) made every memory entry a "still relevant?" question (review
-    of 3.3.1), so the callers tell the two apart."""
-    if _missing_db(db, "no conversations to corroborate with"):
-        return []
-    cutoff = _now().timestamp() - days * 86400
-    out = []
-    c = _conn(db)
-    try:
-        # A file that is no database (or a damaged one) failed every query below, read as "no messages table", and
-        # the night ran with nothing to corroborate in silence (Antigravity review of 3.0.1). It stops the pass; a
-        # busy or locked one gives None (see the docstring).
-        try:
-            c.execute("select count(*) from sqlite_master").fetchone()
-        except sqlite3.OperationalError as exc:
-            print(f"[dream] warn: {db} cannot be read now ({exc}) — corroboration skipped", file=sys.stderr)
-            return None
-        except sqlite3.DatabaseError as exc:
-            raise sqlite3.DatabaseError(f"{db} is not a readable database ({exc})") from exc
-        msg_cols = _table_columns(c, "messages")
-        sess_cols = _table_columns(c, "sessions")
-        if not msg_cols:
-            print("[dream] warn: no messages table — nothing corroborates", file=sys.stderr)
-            return []
-        # Role and visibility go into the WHERE, not into Python: a 60-day
-        # window on a busy install is tens of thousands of rows, 90% of them
-        # tool output (53k rows / ~200M chars and ~0.5 GB RSS on the install the
-        # external review measured). The flags are the core's own visibility
-        # model: active=1 is a live row, compacted=1 is folded by compression
-        # but still visible, 0/0 is rewound — and a rewound row is not speech.
-        where = ["m.timestamp>=?", "m.content is not null", "m.content != ''"]
-        if "observed" in msg_cols:
-            where.append("(m.role='user' or m.observed=1)")
-        else:
-            where.append("m.role='user'")
-        if "active" in msg_cols and "compacted" in msg_cols:
-            where.append("(coalesce(m.active,1)=1 or coalesce(m.compacted,0)=1)")
-        cols = ["m.id", "m.role", "m.content", "m.timestamp",
-                "m.observed" if "observed" in msg_cols else "0",
-                "m.session_id"]
-        if sess_cols:
-            cols += ["s.source", "s.chat_type", "s.chat_id",
-                     "s.thread_id" if "thread_id" in sess_cols else "null",
-                     "s.user_id" if "user_id" in sess_cols else "null",
-                     "s.id"]  # not null exactly when the session row exists
-            join = " left join sessions s on m.session_id = s.id"
-        else:
-            # No usable `sessions` table: the source of a message is unknown.
-            # Fail closed, not open — without it a cron job's own prompt rows
-            # (role=user) corroborated facts. What is still known is the session
-            # id: Hermes before 0.22.3 named cron sessions `cron_…` (later ones
-            # are `local-…`, and their sessions table says `cron`), so those are
-            # dropped outright; the rest are "sessions without chat" and go through the
-            # same config switch as any other session lacking chat metadata.
-            print("[dream] warn: sessions table unavailable — cron sessions dropped by id, "
-                  "the rest trusted only if trust_sessions_without_chat", file=sys.stderr)
-            cols += ["null", "null", "null", "null", "null", "null"]
-            join = ""
-        # In row order: which compaction copy is kept, and everything downstream, must not follow the query plan.
-        sql = (f"select {', '.join(cols)} from messages m{join} "
-               f"where {' and '.join(where)} order by m.id")
-        try:
-            rows = list(c.execute(sql, (cutoff,)))
-        except sqlite3.OperationalError as exc:
-            print(f"[dream] warn: message query failed ({exc}) — corroboration skipped",
-                  file=sys.stderr)
-            return None
-    finally:
-        c.close()
-    seen_rows = set()
-    # Promoted chat stores: each message learns which store its turn wrote to, so a chat-store fact is
-    # corroborated by its own chat only; a promoted chat's message outside the trusted list counts for nothing else.
-    _read, promote = chat_stores_settings() if fact_source() == "holographic" else (False, set())
-    scope = holographic_scope() if promote else "profile"
-    for row in rows:
-        mid, role, content, ts, observed, sid = row[:6]
-        source, chat_type, chat_id, thread_id, user_id, session_row = row[6:12]
-        if not sess_cols and str(sid or "").startswith("cron_"):
-            source = "cron"
-        if not content or not (role == "user" or observed == 1):
+def prepare_messages(items, days, now=None):
+    """The person's messages of the last *days*, ready for corroboration. *items*: dicts with `content`, `ts` (Unix
+    time), `session_id`, and optionally `source` and `key` — the caller has already kept only the person's own words.
+    Harness inserts and `exclude_patterns` are dropped here too, and a sentence repeated in one session at one moment
+    (a copied line) counts once. In time order, so everything downstream is the same however the caller listed them."""
+    cutoff = (now or _now()).timestamp() - days * 86400
+    out, seen_rows = [], set()
+    for i, m in enumerate(sorted(items, key=lambda m: (m.get("ts") or 0, str(m.get("key") or "")))):
+        content, ts, sid = m.get("content"), m.get("ts"), m.get("session_id")
+        if not content or not isinstance(ts, (int, float)) or ts < cutoff:
             continue
-        store = _message_store(source, chat_id, thread_id, user_id, scope) if promote else None
-        own_only = False
-        trusted = _trusted_message(source, chat_type, chat_id, thread_id)
-        if not trusted:
-            if store in promote and _own_store_message(source, chat_id, thread_id):
-                own_only = True
-            else:
-                continue
-        if is_harness_envelope(content):
+        if is_harness_envelope(content) or any(p.search(content) for p in SETTINGS.EXCLUDE_PATTERNS):
             continue
-        if any(p.search(content) for p in SETTINGS.EXCLUDE_PATTERNS):
+        row = (sid, content, ts)
+        if row in seen_rows:
             continue
-        # Compression copies the row it folds, and both copies are visible. The
-        # same sentence must not corroborate twice (it was worth +0.04 of score
-        # per copy, enough to cross the 0.55 gate). Same key as the core's own
-        # _dedupe_display_generations: session, text, timestamp.
-        key = (sid, content, ts)
-        if key in seen_rows:
-            continue
-        seen_rows.add(key)
-        # Where the message came from stays with it (3.3.0): a cloud judge sends nothing of unknown origin.
-        out.append({"id": mid, "content": content, "ts": ts, "day": _day_of(ts),
-                    "tokens": sig_tokens(content), "store": store if store in promote else None,
-                    "own_only": own_only, "chat_type": chat_type, "user_id": user_id,
-                    "source": source, "chat_id": chat_id, "thread_id": thread_id, "session_id": sid,
-                    "session_found": session_row is not None, "locally_trusted": trusted,
-                    "key": _message_key(sid, ts, content)})
+        seen_rows.add(row)
+        out.append({"id": i, "content": content, "ts": ts, "day": _day_of(ts), "tokens": sig_tokens(content),
+                    "source": m.get("source"), "session_id": sid,
+                    "key": m.get("key") or _message_key(sid, ts, content)})
     return out
 
 
@@ -1962,105 +904,39 @@ def signals_for_fact(f, messages, now=None, rules=None, veto=None, counted=None)
 # Durable memory: dedupe
 # ---------------------------------------------------------------------------
 
-def _memory_candidate_paths(mem_md):
-    """Durable memory/profile files already injected into future turns.
-
-    Facts may already be represented in USER.md or in repo-side copies, so
-    promotions must dedupe against all of them — otherwise the dream keeps
-    proposing the same profile facts forever."""
-    paths = [mem_md]
-    for p in SETTINGS.DURABLE_MEMORY_PATHS:
-        p = os.path.expanduser(str(p))
-        paths.append(p if os.path.isabs(p) else os.path.join(HOME, p))
-    seen, out = set(), []
-    for p in paths:
-        ap = os.path.abspath(p)
-        if ap not in seen:
-            seen.add(ap)
-            out.append(ap)
-    return out
-
-
-# The unit of durable memory is the §-ENTRY, not the paragraph. The core
-# splits on the FULL delimiter "\n§\n" (so a bare § inside a line survives),
-# strips each entry and drops empty ones — and `memory replace` locates an
-# entry by `old_text` and then rewrites THAT WHOLE ENTRY
-# (tools/memory_tool_store.py:23, 298-302, 510-512).
-#
-# This script used to split on blank lines as well. Two consequences, both
-# reported from a live install (external review of v2.1.1, 2026-10-07): an
-# anchor taken from the second paragraph of a multi-paragraph entry made the
-# agent's replace wipe the entry whole (6 261 → 996 chars on a real
-# MEMORY.md), and an anchor with collapsed whitespace was not found at all
-# because the core matches `old_text` as a RAW substring.
+# Memory comes in as texts, not files. `notes` are the entries the night may ask "still relevant?" about (Claude
+# Code's memory notes); `dedupe` are texts that already are memory and are only compared against (instructions,
+# Codex memory). Internally they are joined with one delimiter into `memory_text`, split back into comparison units.
 MEMORY_ENTRY_DELIMITER = "\n§\n"
 
 
-def _read_memory_file(path):
-    """Memory file as the core reads it: utf-8-sig, so a BOM never becomes part
-    of the first entry (and of an anchor built from it).
+class Memory(namedtuple("Memory", "notes dedupe")):
+    """What the agents' memory holds tonight: `notes` (tuple of str, asked about) and `dedupe` (tuple of str)."""
+    __slots__ = ()
 
-    A memory file that is there but cannot be read raises, and the callers let it: read as "no memory", dedupe
-    offered what memory already holds, the loss guard saw every entry gone and emptied its snapshot (review of
-    3.3.1). Only a file that vanished since `os.path.exists` is skipped."""
-    with open(path, encoding="utf-8-sig") as f:
-        return f.read()
-
-
-LEADING_DELIMITER_RE = re.compile("^[" + chr(92) + "s" + chr(0xFEFF) + "]*§[ " + chr(92) + "t]*\r?\n")
+    def __new__(cls, notes=(), dedupe=()):
+        def clean(items):
+            return tuple(t for t in ((s or "").replace(MEMORY_ENTRY_DELIMITER, "\n").strip() for s in items) if t)
+        return super().__new__(cls, clean(notes), clean(dedupe))
 
 
 def _memory_entries(text):
-    """§-entries exactly as the core parses them.
-
-    One documented tolerance: a delimiter at the very START of the file. The
-    core never writes one (it joins entries with the delimiter), but a hand
-    edit often does, and then the core carries a stray "§" into entry #1 —
-    which would show up in our preview, our anchor and our loss-guard key."""
-    raw = LEADING_DELIMITER_RE.sub("", text or "", count=1)
-    return [e for e in (p.strip() for p in raw.split(MEMORY_ENTRY_DELIMITER)) if e]
+    """Comparison units of a joined memory text."""
+    return [e for e in (p.strip() for p in (text or "").split(MEMORY_ENTRY_DELIMITER)) if e]
 
 
-def load_durable_memory_text(mem_md):
-    chunks = []
-    for path in _memory_candidate_paths(mem_md):
-        if os.path.exists(path):
-            try:
-                text = _read_memory_file(path)
-            except FileNotFoundError:
-                continue
-            # CRLF не особый случай: ядро читает память через read_text, то есть
-            # с универсальными переводами строк — \r\n приходит как \n (проверено
-            # на 0.21.5). Наш open() в текстовом режиме делает то же.
-            chunks.append(text)
-    # Joined with the delimiter, not a blank line: otherwise the last entry of
-    # one file and the first of the next merge into one comparison unit.
-    return MEMORY_ENTRY_DELIMITER.join(chunks)
+def load_durable_memory_text(memory):
+    return MEMORY_ENTRY_DELIMITER.join(memory.notes + memory.dedupe)
 
 
 def _memory_chunks(memory_text):
-    """Comparison units for fuzzy dedupe — the core's §-entries."""
+    """Comparison units for fuzzy dedupe."""
     return _memory_entries(memory_text) or [(memory_text or "").strip()]
 
 
-def load_durable_memory_sources(mem_md):
-    """[(target, chunk)] for the files the agent can actually EDIT.
-
-    Only the runtime pair — `--memory-md` (target `memory`) and USER.md next to
-    it (target `user`) — is included. The other `durable_memory_paths` are
-    read-only copies used for dedupe; pointing the agent at those would send it
-    to edit a file its `memory` tool does not own."""
-    out = []
-    for target, path in (("memory", mem_md),
-                         ("user", os.path.join(os.path.dirname(mem_md), "USER.md"))):
-        if not path or not os.path.exists(path):
-            continue
-        try:
-            text = _read_memory_file(path)
-        except FileNotFoundError:
-            continue
-        out.extend((target, entry) for entry in _memory_entries(text))
-    return out
+def load_durable_memory_sources(memory):
+    """[(target, entry)] of the notes — what `nearest_entry` may point at."""
+    return [("memory", entry) for entry in memory.notes]
 
 
 NUM_TERM_RE = re.compile(r"^#(\d+)$")
@@ -3414,22 +2290,10 @@ def find_duplicate_pairs(facts, max_checks=None):
     return found, len(checked)
 
 
-def feedback_floor(fact_source_name=None, home=None):
-    """The trust below which the provider stops recalling a fact.
-
-    Explicit `gates.feedback_trust_floor` wins; otherwise the holographic
-    provider's own `min_trust_threshold`; otherwise 0.3 (its default, and the
-    value every earlier version of this pass assumed). Not cached: 2.7.1 kept
-    the answer in a module global shared by every home and every run, so a
-    second run in the same process — or a run for another home — got the first
-    one's floor (Codex review). A config read costs nothing next to the pass."""
-    if SETTINGS.FEEDBACK_FLOOR_EXPLICIT:
-        return SETTINGS.FEEDBACK_TRUST_FLOOR
-    source = fact_source_name if fact_source_name is not None else fact_source()
-    if source != "holographic":
-        return SETTINGS.FEEDBACK_TRUST_FLOOR
-    provider = holographic_min_trust(home)
-    return SETTINGS.FEEDBACK_TRUST_FLOOR if provider is None else provider
+def feedback_floor(fact_source_name=None):
+    """The trust below which the store stops recalling a fact: `gates.feedback_trust_floor` — the caller sets it to
+    the store's own `min_trust_threshold` (0.3 by default)."""
+    return SETTINGS.FEEDBACK_TRUST_FLOOR
 
 
 def trust_feedback_items(suppressed, rejected, fact_source_name, floor=None):
@@ -4193,15 +3057,9 @@ def extract_themes(messages, window_days):
     return themes
 
 
-def parse_md_entries(mem_md):
-    """§-entries of a memory file, parsed exactly as the core does."""
-    if not os.path.exists(mem_md):
-        return []
-    try:
-        text = _read_memory_file(mem_md)
-    except FileNotFoundError:
-        return []
-    return [e for e in _memory_entries(text) if len(e) > 10]
+def parse_md_entries(memory):
+    """The notes the night may ask about (entries of 10 characters or less are too short to judge)."""
+    return [e for e in memory.notes if len(e) > 10]
 
 
 def _entry_key(entry):
@@ -4350,13 +3208,12 @@ def _entry_head_key(entry):
     return hashlib.md5(_norm(entry)[:ENTRY_HEAD_CHARS].encode("utf-8")).hexdigest()[:16]
 
 
-def _entry_sizes_of(path):
-    """Snapshot of one file: sizes by entry key and by entry head.
+def _entry_sizes_of(entries):
+    """Snapshot of the notes: sizes by entry key and by entry head.
 
     Sizes make the guard notice that one BIG entry vanished among small ones;
     head keys make it notice an entry that kept its beginning and lost its
     body — the exact shape of a replace that swallowed a multi-section entry."""
-    entries = parse_md_entries(path)
     return {"entries": {_entry_key(e): len(e) for e in entries},
             "heads": {_entry_head_key(e): len(e) for e in entries}}
 
@@ -4410,150 +3267,77 @@ def check_probes(memory_text, previous_missing):
     missing = [p for p in SETTINGS.PROBES if not probe_found(p, memory_text)]
     before = set(previous_missing or [])
     alerts = [{"kind": "probe_missing", "probe": p[:120],
-               "message": f"memory no longer holds “{p[:120]}” (a probe in dreaming.json) — check whether an "
+               "message": f"memory no longer holds “{p[:120]}” (a probe in the settings) — check whether an "
                           f"entry was merged or removed by mistake."} for p in missing if p not in before]
     return alerts, missing
 
 
-def check_memory_loss(mem_md, snapshot_path, memory_text=None):
-    """Compare durable files with the previous snapshot; write a new one.
-    Returns a list of alerts (possibly empty)."""
+def check_memory_loss(memory, snapshot_path, memory_text=None):
+    """Compare the notes with the previous snapshot; write a new one. Returns a list of alerts (possibly empty)."""
     if not snapshot_path:
-        if SETTINGS.PROBES:  # without the snapshot a missing probe would alert every night
-            print("[dream] warn: probes are checked only with a snapshot state (--snapshot-state)", file=sys.stderr)
         return []
     previous = load_snapshot(snapshot_path)
-    current, alerts = {}, []
+    alerts = []
     probes_missing = []
     if SETTINGS.PROBES and memory_text is not None:
         probe_alerts, probes_missing = check_probes(memory_text, previous.get("_probes_missing"))
         alerts.extend(probe_alerts)
-    for p in _memory_candidate_paths(mem_md):
-        name = _rel_home(p)
-        prev_sizes, prev_heads = _snapshot_sizes(previous.get(name))
-        prev = set(prev_sizes)
-        if not os.path.exists(p):
-            # A file that was there yesterday and is gone today is the loudest
-            # loss there is — it must not slip through as "nothing to compare"
-            # and then be overwritten by an empty snapshot. Alert once; the
-            # snapshot forgets the file only after the alert was raised.
-            # The same floor as for a file that is still there: one big entry is worth an alert too
-            # (Codex review of 2.7.2 — a lone 2000-character entry vanished with its file, silently).
-            if len(prev) >= 4 or sum(prev_sizes.values()) >= LOSS_MIN_CHARS:
-                alerts.append({"kind": "memory_loss", "file": name,
-                               "lost": len(prev), "had": len(prev),
-                               "message": f"{name}: the file is missing — all {len(prev)} entries "
-                                          f"present at the previous pass are gone. "
-                                          f"Check whether that was intended."})
-            continue
-        snap = _entry_sizes_of(p)
-        current[name] = snap
-        sizes, heads = snap["entries"], snap["heads"]
-        keys = set(sizes)
-        prev_total = sum(prev_sizes.values())
-        if len(prev) >= 4 or prev_total >= LOSS_MIN_CHARS:
-            lost = prev - keys
-            frac = len(lost) / len(prev)
-            prev_chars = prev_total
-            lost_chars = sum(prev_sizes.get(k, 0) for k in lost)
-            char_frac = (lost_chars / prev_chars) if prev_chars else 0.0
-            if frac > SETTINGS.MEMORY_LOSS_ALERT_FRACTION or char_frac > SETTINGS.MEMORY_LOSS_ALERT_FRACTION:
-                # Entry count alone misses "one big entry vanished"; the share of
-                # characters alone misses "many small entries gone". Both, then.
-                alerts.append({"kind": "memory_loss", "file": name,
-                               "lost": len(lost), "had": len(prev),
-                               "lost_chars": lost_chars, "had_chars": prev_chars,
-                               "message": f"{name}: {len(lost)} of {len(prev)} entries present at the "
-                                          f"previous pass are gone "
-                                          f"({round(100 * frac)}% of entries, "
-                                          f"{round(100 * char_frac)}% of characters). "
-                                          f"Check whether that was intended."})
-            # An entry that kept its head but lost most of its body: a replace
-            # that swallowed the rest of a multi-section entry.
-            for key, was in prev_heads.items():
-                now_len = heads.get(key)
-                if not was or now_len is None or was < SHRINK_MIN_CHARS:
-                    continue
-                if now_len < was * (1 - SETTINGS.MEMORY_LOSS_ALERT_FRACTION * 2):
-                    alerts.append({"kind": "entry_truncated", "file": name,
-                                   "had_chars": was, "chars": now_len,
-                                   "message": f"{name}: an entry shrank from {was} to {now_len} "
-                                              f"characters while keeping its beginning — check that "
-                                              f"a replace did not drop the rest of it."})
+    name = "notes"
+    prev_sizes, prev_heads = _snapshot_sizes(previous.get(name))
+    prev = set(prev_sizes)
+    snap = _entry_sizes_of(parse_md_entries(memory))
+    sizes, heads = snap["entries"], snap["heads"]
+    keys = set(sizes)
+    prev_total = sum(prev_sizes.values())
+    if len(prev) >= 4 or prev_total >= LOSS_MIN_CHARS:
+        lost = prev - keys
+        frac = len(lost) / len(prev) if prev else 0.0
+        lost_chars = sum(prev_sizes.get(k, 0) for k in lost)
+        char_frac = (lost_chars / prev_total) if prev_total else 0.0
+        if frac > SETTINGS.MEMORY_LOSS_ALERT_FRACTION or char_frac > SETTINGS.MEMORY_LOSS_ALERT_FRACTION:
+            # Entry count alone misses "one big note vanished"; the share of characters alone misses "many small
+            # notes gone". Both, then.
+            alerts.append({"kind": "memory_loss", "file": name, "lost": len(lost), "had": len(prev),
+                           "lost_chars": lost_chars, "had_chars": prev_total,
+                           "message": f"{len(lost)} of {len(prev)} memory notes present at the previous pass are "
+                                      f"gone ({round(100 * frac)}% of notes, {round(100 * char_frac)}% of "
+                                      f"characters). Check whether that was intended."})
+        # A note that kept its head but lost most of its body.
+        for key, was in prev_heads.items():
+            now_len = heads.get(key)
+            if not was or now_len is None or was < SHRINK_MIN_CHARS:
+                continue
+            if now_len < was * (1 - SETTINGS.MEMORY_LOSS_ALERT_FRACTION * 2):
+                alerts.append({"kind": "entry_truncated", "file": name, "had_chars": was, "chars": now_len,
+                               "message": f"a memory note shrank from {was} to {now_len} characters while keeping "
+                                          f"its beginning — check that nothing was dropped from it."})
     try:
         _write_private(snapshot_path, json.dumps(
-            {**current, "_at": _now().isoformat(timespec="seconds"),
+            {name: snap, "_at": _now().isoformat(timespec="seconds"),
              **({"_probes_missing": probes_missing} if probes_missing else {})}, ensure_ascii=False))
     except OSError as e:
         print(f"[dream] warn: snapshot not written: {e}", file=sys.stderr)
     return alerts
 
 
-def _agent_acked(state_db, generated_at):
-    """Did the agent turn that received the payload stamped `generated_at`
-    actually answer? Cooldowns used to start the moment the pre-check printed
-    an item — if the model or the memory tool then failed, the item vanished
-    for 14 days without any outcome. There is no channel for the agent to
-    acknowledge at night (a cron session has memory and nothing else), but the
-    session itself is on record: Hermes stores cron sessions in state.db, the
-    job prompt (role=user) carries the payload verbatim, and a completed turn
-    leaves a non-empty assistant message. So the next pass looks back: no
-    session with that stamp, or a session without an answer → not acked → the
-    marks are dropped and the items come back tonight.
-
-    Fail-soft: no state.db / no messages table → assume acked (old behaviour),
-    otherwise a host that does not persist sessions would re-show every night."""
-    return _agent_answers(state_db, generated_at)[0]
-
-
-def _agent_answers(state_db, generated_at):
-    """(acked, the answers) of the agent turn that received the payload stamped `generated_at` — as
-    `_agent_acked`, with the texts of the answers it found (3.4.0: a merge question counts as asked only when the
-    answer names its number). The answers are None when they cannot be known (the fail-soft cases)."""
+def _agent_answers(acks, generated_at):
+    """(acked, the answers) of the night stamped `generated_at`. *acks*: {generated_at: [answer texts]} — the nights
+    a person answered, given by the caller (a night is acknowledged only by an answer, never by being shown). A merge
+    question counts as answered only when an answer names its number (`D-17`)."""
     if not generated_at:
         return True, None
-    if not os.path.exists(state_db):
-        return True, None
-    when = _parse_iso(generated_at)
-    since = when.timestamp() - 3600 if when else 0
-    needles = (f'"generated_at":"{generated_at}"', f'"generated_at": "{generated_at}"')
-    c = _conn(state_db)
-    try:
-        try:
-            msg_cols = _table_columns(c, "messages")
-            sids = [r[0] for r in c.execute(
-                "select distinct session_id from messages where role='user' and timestamp>=? "
-                "and (instr(coalesce(content,''),?)>0 or instr(coalesce(content,''),?)>0)",
-                (since, *needles))]
-            if not sids:
-                return False, []
-            # An answer is an answer: not a harness notice, not a row the core
-            # typed as a failed turn, not the text that preceded a tool call in
-            # a turn that then died. "Operation interrupted." used to count
-            # (external review, 2026-10-07).
-            where = ["session_id=?", "role='assistant'", "trim(coalesce(content,''))!=''"]
-            if "display_kind" in msg_cols:
-                where.append("coalesce(display_kind,'')!='failed_turn'")
-            if "tool_calls" in msg_cols:
-                where.append("coalesce(tool_calls,'')=''")
-            sql = f"select content from messages where {' and '.join(where)} limit 20"
-            answers = [content for sid in sids for (content,) in c.execute(sql, (sid,))
-                       if not is_harness_envelope(content)]
-            return bool(answers), answers
-        except sqlite3.OperationalError:
-            return True, None
-    finally:
-        c.close()
+    answers = [a for a in (acks or {}).get(generated_at) or [] if str(a or "").strip()]
+    return bool(answers), answers
 
 
-def _revert_unacked(seen, state_db):
+def _revert_unacked(seen, acks):
     """Pop the previous pass's `_pending` record from the seen state; if that
     showing was never acknowledged, drop its marks. Returns the md_decays keys
     to re-ask (the asked-state lives in its own file)."""
     pending = seen.pop("_pending", None)
     if not isinstance(pending, dict) or not pending.get("generated_at"):
         return set()
-    acked, answers = _agent_answers(state_db, pending.get("generated_at"))
+    acked, answers = _agent_answers(acks, pending.get("generated_at"))
     if acked:
         _reopen_unnamed_proposals(pending, seen, answers)
         return set()
@@ -4572,118 +3356,6 @@ def _revert_unacked(seen, state_db):
               f"agent turn — {dropped} cooldown(s) and {len(reask)} md question(s) reopened",
               file=sys.stderr)
     return reask
-
-
-def load_pending_writes(home=None):
-    """Memory writes staged for human approval, newest first.
-
-    With `memory.write_approval: true` a cron write answers `success: true,
-    staged: true` and MEMORY.md stays as it was. The dream has to read the
-    queue to tell "saved" from "waiting", or it offers the same candidate every
-    night and the queue grows (87 unattended items on the install the external
-    review measured). Fail-soft: no directory, unreadable or foreign JSON — an
-    empty list, never an exception."""
-    base = os.path.join(home or HOME, SETTINGS.PENDING_DIR)
-    out = []
-    try:
-        names = sorted(os.listdir(base))
-    except OSError:
-        return out
-    for name in names:
-        if not name.endswith(".json"):
-            continue
-        try:
-            with open(os.path.join(base, name), encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, ValueError):
-            continue
-        if not isinstance(data, dict):
-            continue
-        payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
-        record_id = str(data.get("id") or name[:-5])
-        created = data.get("created_at") if isinstance(data.get("created_at"), (int, float)) else None
-        for pos, op in enumerate(_pending_ops(payload)):
-            content = op.get("content") or op.get("new_content") or ""
-            out.append({
-                "id": record_id if len(_pending_ops(payload)) == 1 else "%s#%d" % (record_id, pos),
-                "record_id": record_id,
-                "action": str(op.get("action") or data.get("action") or ""),
-                "target": str(op.get("target") or payload.get("target") or ""),
-                "content": content if isinstance(content, str) else "",
-                "old_text": op.get("old_text") if isinstance(op.get("old_text"), str) else "",
-                "created_at": created,
-            })
-    out.sort(key=lambda p: p.get("created_at") or 0, reverse=True)
-    return out
-
-
-def _pending_ops(payload):
-    """The writes inside one queued record: a single write, or every op of a
-    batch. The core stages an `operations[]` call as ONE record whose payload
-    carries `action: "batch"` and the ops themselves (`memory_tool.py`:
-    "batch if operations is not None"), and the skill is the side that asks for
-    batches — so reading only the top level made every staged batch look like an
-    empty write: invisible to `_staged_text`, and the pass would offer the same
-    candidates again the next night, which is the one thing this queue reader
-    exists to prevent. Malformed input degrades to "one write", never raises."""
-    ops = payload.get("operations")
-    if isinstance(ops, (list, tuple)):
-        inner = [op for op in ops if isinstance(op, dict)]
-        if inner:
-            return inner
-    if str(payload.get("action") or "") == "batch":
-        # A batch whose ops are unreadable: keep whatever text the record carries
-        # and drop the "batch" label, so the queue still counts as staged instead
-        # of silently reading as "nothing is waiting".
-        return [dict(payload, action="")]
-    return [payload]
-
-
-def _staged_text(pending):
-    """One blob of everything the queue would write — `already_in_memory` then
-    answers "is this candidate already waiting?" with the same machinery that
-    answers "is it already in memory?"."""
-    return MEMORY_ENTRY_DELIMITER.join(
-        p["content"] for p in pending
-        if p.get("content") and p.get("action") in ("add", "replace", ""))
-
-
-def _staged_removals(pending):
-    """Texts the queue would REMOVE (or replace away): an entry whose removal is
-    waiting must not be asked about, nor counted as confirmed by its cooldown."""
-    return [p.get("old_text") or p.get("content") or ""
-            for p in pending if p.get("action") in ("remove", "replace")]
-
-
-def pending_alert(pending, seen, now):
-    """An alert when the queue is both big and old — once per cooldown.
-
-    The queue is the human's job, not the agent's, so this is a reminder, not
-    work: it fires only when `alert_min` items have been waiting longer than
-    `alert_days`, and then rests for the usual cooldown."""
-    if not pending or len(pending) < SETTINGS.PENDING_ALERT_MIN:
-        return None
-    oldest = min((p["created_at"] for p in pending if p.get("created_at")), default=None)
-    if not oldest:
-        return None
-    age_days = (now.timestamp() - oldest) / 86400
-    if age_days < SETTINGS.PENDING_ALERT_DAYS:
-        return None
-    last = _parse_iso((seen.get("_pending_alert") or {}).get("at"))
-    if last and (now - last) < timedelta(days=SETTINGS.SEEN_COOLDOWN_DAYS):
-        return None
-    seen["_pending_alert"] = {"at": now.isoformat(timespec="seconds"), "count": len(pending)}
-    # Writes and queued records differ when a record holds an `operations[]` batch:
-    # the human reviewing the queue sees records, so name both rather than let the
-    # numbers disagree with what `/memory pending` shows.
-    records = len({p.get("record_id") or p.get("id") for p in pending})
-    scope = (f"{len(pending)} memory write(s)" if records == len(pending)
-             else f"{len(pending)} memory write(s) in {records} queued record(s)")
-    return {"kind": "pending_writes", "count": len(pending), "records": records,
-            "oldest_days": round(age_days),
-            "message": (f"{scope} are waiting for approval, the oldest for "
-                        f"{round(age_days)} days — nothing from them is in memory yet. "
-                        f"Review them (`/memory` in Hermes) or turn the gate off.")}
 
 
 def _load_asked_state(path):
@@ -4739,9 +3411,9 @@ def _md_cooldown_end(rec):
 
 
 @_message_pass
-def md_decays(mem_md, messages, decay_days, asked_state_path=None, cap=None, reask=(),
+def md_decays(memory, messages, decay_days, asked_state_path=None, cap=None, reask=(),
               staged_removals=(), rules=None):
-    """§-entries of MEMORY.md that have not surfaced in conversations for long
+    """Memory notes that have not surfaced in conversations for long
     → soft flag "still relevant?".
 
     Cooldowns. An entry asked within MD_ASK_COOLDOWN_DAYS is not raised again
@@ -4767,7 +3439,7 @@ def md_decays(mem_md, messages, decay_days, asked_state_path=None, cap=None, rea
         if key in asked:
             asked.pop(key, None)
             changed = True
-    entries = [(i, entry, _entry_key(entry)) for i, entry in enumerate(parse_md_entries(mem_md))]
+    entries = [(i, entry, _entry_key(entry)) for i, entry in enumerate(parse_md_entries(memory))]
     current_keys = {key for _, _, key in entries}
     orphans = {k: r for k, r in asked.items() if k not in current_keys and r.get("stems")}
     for i, entry, key in entries:
@@ -4824,38 +3496,6 @@ def md_decays(mem_md, messages, decay_days, asked_state_path=None, cap=None, rea
                 _write_private(asked_state_path, json.dumps(kept, ensure_ascii=False, indent=1))
             except OSError as e:
                 print(f"[dream] warn: asked-state not written: {e}", file=sys.stderr)
-    return out
-
-
-def _rel_home(path):
-    """Path relative to HERMES_HOME when inside it (keys of memory_char_limits)."""
-    try:
-        rel = os.path.relpath(path, HOME)
-    except ValueError:  # different drive on Windows
-        return path
-    return path if rel.startswith("..") else rel.replace(os.sep, "/")
-
-
-def memory_usage(mem_md):
-    """Fill level of the durable files (chars, and % when a limit is configured).
-    Keys are paths relative to HERMES_HOME (e.g. `memories/MEMORY.md`), and so
-    are the keys of `memory_char_limits` in the config."""
-    out = {}
-    for path in _memory_candidate_paths(mem_md):
-        if not os.path.exists(path):
-            continue
-        try:
-            with open(path, encoding="utf-8") as f:
-                n = len(f.read())
-        except FileNotFoundError:  # anything else raises, as in `_read_memory_file`
-            continue
-        name = _rel_home(path)
-        limit = SETTINGS.MEMORY_CHAR_LIMITS.get(name)
-        rec = {"chars": n}
-        if limit:
-            rec["limit"] = int(limit)
-            rec["percent"] = round(Fraction(100 * n, int(limit)))  # exact: a 400-digit limit overflowed a float
-        out[name] = rec
     return out
 
 
@@ -4971,41 +3611,34 @@ BUCKETS = ("new_facts", "fact_decays", "conflicts", "promotions", "trust_feedbac
 class DecisionInputs(namedtuple("DecisionInputs", "now today window_days rules facts messages by_store memory_text "
                                 "staged_text pending_writes rejected recent_confirmations feedback_floor "
                                 "fact_source seen messages_unavailable")):
-    """Everything the night's decisions read from the world, read once (3.3.0). `_decide` reads nothing else — no
-    clock, database, environment or config file; it reads the settings, which must not change while it runs
+    """Everything the night's decisions read from the world, read once. `_decide` reads nothing else — no clock,
+    database, environment or file; it reads the settings, which must not change while it runs
     (`settings_fingerprint`). `seen` is a copy: deciding never marks anything shown. `recent_confirmations`: a
-    frozenset of fact ids, or None when the store keeps no confirmations. `messages_unavailable`: state.db was busy
-    or locked (`load_messages` gave None) — `messages` is empty, and that says nothing about what people said.
+    frozenset of fact ids, or None when the store keeps no confirmations. `staged_text`, `pending_writes` and
+    `messages_unavailable` stay empty here (the caller decides what a night may ask when a source was unreadable).
 
     A named tuple, not a dataclass: under `from __future__ import annotations` a dataclass looks its module up in
     sys.modules, so a script that loaded dream.py by path without registering it failed to load it at all (3.3.1)."""
     __slots__ = ()
 
 
-def load_inputs(window_days, corr_days, mem_md, rejected_state_path=None, seen_state_path=None, seen=None, now=None):
-    """The DecisionInputs of a night. *seen*: the state after `_revert_unacked` when the pass has it already."""
-    facts = load_all_facts()
-    all_messages = load_messages(os.path.join(HOME, "state.db"), corr_days)
-    unavailable = all_messages is None
-    all_messages = all_messages or []
+def load_inputs(window_days, memory, messages, rejected_state_path=None, seen=None, now=None):
+    """The DecisionInputs of a night: the store's facts (read now, read-only), the prepared *messages*, *memory*,
+    the reject list and the cooldown state *seen*."""
+    facts = load_facts()
     now = now or _now()
     source = fact_source()
-    # A write waiting for approval is not in memory yet, but it IS the answer to
-    # the candidate that produced it: offering it again every night only grows
-    # the queue. The staged texts are treated as a second memory file — the same
-    # dedupe decides "already covered".
-    pending_writes = load_pending_writes()
     rested = recent_confirmations(fact_store_path(), now=now) if source == "holographic" else None
     return DecisionInputs(
         now=now, today=now.astimezone(SETTINGS.LOCAL_TZ).date(), window_days=window_days,
-        rules=rules_context(f.get("content") for f in facts if not f.get("store")),
-        facts=tuple(facts), messages=tuple(all_messages),
-        by_store=types.MappingProxyType({k: tuple(v) for k, v in messages_by_store(all_messages).items()}),
-        memory_text=load_durable_memory_text(mem_md), staged_text=_staged_text(pending_writes),
-        pending_writes=tuple(pending_writes), rejected=types.MappingProxyType(load_rejected(rejected_state_path)),
+        rules=rules_context(f.get("content") for f in facts),
+        facts=tuple(facts), messages=tuple(messages),
+        by_store=types.MappingProxyType({k: tuple(v) for k, v in messages_by_store(messages).items()}),
+        memory_text=load_durable_memory_text(memory), staged_text="", pending_writes=(),
+        rejected=types.MappingProxyType(load_rejected(rejected_state_path)),
         recent_confirmations=None if rested is None else frozenset(rested),
         feedback_floor=feedback_floor(source), fact_source=source,
-        seen=copy.deepcopy(load_seen(seen_state_path) if seen is None else seen), messages_unavailable=unavailable)
+        seen=copy.deepcopy(seen or {}), messages_unavailable=False)
 
 
 class Decisions(namedtuple("Decisions", "scored suppressed quarantined expired expired_ids new_facts_window "
@@ -5214,10 +3847,6 @@ def store_versions(db):
         c.close()
 
 
-def proposals_path():
-    return _state_default("DREAM_PROPOSALS_STATE", "proposals")
-
-
 def load_proposals(path):
     """{"next_proposal": n, "proposals": {"D-17": record}} of `cache/dream-proposals.json` (for the holder of the
     state lock: a broken file is moved aside)."""
@@ -5340,23 +3969,11 @@ def duplicate_pairs_night(inputs, d, excluded_ids, seen, proposals_file, now, wr
         return _dup_skip("disabled")
     if inputs.fact_source != "holographic":
         return _dup_skip("not_holographic")
-    # The "yes" is carried out by whichever session answers, in the database its provider opens: the pass must read
-    # that very one. A scope that cannot be read, a provider path that cannot be resolved here, or a fact store
-    # set for the dream (`DREAM_FACT_STORE`, `fact_store_path`) other than the provider's turns the section off —
-    # ids and versions of two databases look alike, and `expect` cannot tell them apart.
-    if ".".join(_STORE) in hermes_config_unread():
-        return _dup_skip("scope_unknown")
-    scope = holographic_scope()
-    if scope != "profile":
-        return _dup_skip(f"scope_{scope}")
-    store = provider_store_path()
-    if store is None:
-        return _dup_skip("store_unknown")
-    db = fact_store_path()
+    # The "yes" is carried out by the memory tools of a session, in the database they open; the caller passes that
+    # very path as `store`, and every proposal carries it (the agent compares it with `memory_stats` before merging).
+    db = store = fact_store_path()
     if not db or not os.path.exists(db):
         return _dup_skip("no_store")
-    if not same_file(db, store):
-        return _dup_skip("store_mismatch")
     try:
         merges = store_merges(db)
         if merges is None:
@@ -5397,7 +4014,7 @@ def duplicate_pairs_night(inputs, d, excluded_ids, seen, proposals_file, now, wr
             alert = {"kind": "duplicates_budget", "facts": len(eligible),
                      "message": (f"The search for duplicate facts was skipped tonight: {len(eligible)} facts need "
                                  f"more than {SETTINGS.DUP_MAX_PAIR_CHECKS} pair checks "
-                                 "(`duplicates.max_pair_checks` in dreaming.json). Nothing else is affected.")}
+                                 "(`duplicates.max_pair_checks`). Nothing else is affected.")}
             if write:
                 seen["_dup_budget_alert"] = {"at": now.isoformat(timespec="seconds")}
         if write and changed:
@@ -5508,213 +4125,6 @@ def _reopen_unnamed_proposals(pending, seen, answers):
     return reopened
 
 
-# ---------------------------------------------------------------------------
-# The cloud judge (3.3.0, optional): what may leave, the night's pass, its files
-# ---------------------------------------------------------------------------
-# The rules count a pair (fact, message) as a mention when they share enough words; the judge (dream_judge.py) asks
-# a decision model whether the message confirms the fact and may take the pair out of the count. Here: which pairs
-# may be sent and with which text, what the night does with the verdicts, and the judge's files — read and written
-# by the pass like its other state, and cleaned by the forget sweep even while the judge is off.
-
-JudgeFiles = namedtuple("JudgeFiles", "cache journal health manifest")
-# How a pass may use the judge. `live`: send what the cache does not answer and write the judge's files — a real
-# night. Otherwise only the cache is read (or the recorded answers of `replay`) and nothing of the judge is written:
-# a dry run, a replay, a direct call of run().
-JudgeRun = namedtuple("JudgeRun", "files live deadline replay", defaults=(False, None, None))
-JUDGE_FACT_MAX, JUDGE_WORDS_MAX = 400, 600
-# A night that judged under half of what it could send applies no veto: a part of the pairs judged would bias the
-# count towards whatever the network let through.
-JUDGE_MIN_COVERAGE = 0.5
-JUDGE_KEEP_DAYS = 90  # the journal of sent pairs and a review manifest
-# The sections whose membership the count decides (the diff of a night with and without the vetoes).
-_DIFF_SECTIONS = ("promotions", "ephemeral_events", "new_facts", "conflicts", "fact_decays", "confirm",
-                  "trust_feedback")
-_JUDGE = None
-
-
-def judge_files():
-    """The judge's files of this home (dreaming.json `state`, `$DREAM_JUDGE_CACHE` etc.)."""
-    return JudgeFiles(*(_state_default(f"DREAM_JUDGE_{name.upper()}", f"judge_{name}") for name in JudgeFiles._fields))
-
-
-def _load_judge(path=None):
-    """dream_judge.py next to this file, loaded once — and only when the judge is on or a review command runs."""
-    global _JUDGE
-    if _JUDGE is None or path:
-        path = path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "dream_judge.py")
-        spec = importlib.util.spec_from_file_location("_dream_judge", path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        _JUDGE = mod
-    return _JUDGE
-
-
-def judge_permission(fact, m, js=None):
-    """None when the pair (*fact*, message *m*) may be sent to the judge, else why not (plan §3). Only what the
-    owner listed leaves. The message's origin must be known (its session row, session id and source) and its source
-    listed. A trusted chat leaves by "trusted" or by its id, a private chat (trust_private_chats) the same way; a
-    promoted chat outside the trusted list only by its own id with its store in `send_fact_stores`; a session
-    without a chat only with `send_no_chat_sessions`; a chat type without a chat id never. A chat-store fact's text
-    leaves only from a listed store; memory entries are never candidates."""
-    js = js or SETTINGS.JUDGE
-    store = fact.get("store")
-    if store and store not in js.send_fact_stores:
-        return "fact_store"
-    source = str(m.get("source") or "").strip()
-    if not m.get("session_found") or not str(m.get("session_id") or "").strip() or not source:
-        return "origin"
-    if source not in js.send_sources:
-        return "source"
-    cid, ctype = str(m.get("chat_id") or "").strip(), str(m.get("chat_type") or "").strip()
-    named = bool(cid) and cid in js.send_from
-    if m.get("own_only"):
-        return None if named and store else "chat"
-    if not m.get("locally_trusted"):
-        return "chat"
-    if cid and cid in SETTINGS.TRUSTED_CHAT_IDS:
-        return None if js.send_trusted or named else "chat"
-    if cid and ctype in ("dm", "private") and SETTINGS.TRUST_PRIVATE:
-        return None if js.send_trusted or named else "chat"
-    if not cid and not ctype and SETTINGS.TRUST_NO_CHAT:
-        return None if js.send_no_chat_sessions else "chat"
-    return "chat"
-
-
-# What the judge's words lose besides URL_RE's links (http(s)://, www.): any other scheme (tg://, mailto:) and a bare
-# host with a path — t.me/…, example.com/zapis?token=… (Codex review of 3.3.0). A bare domain without a path stays:
-# it names a service and carries nothing of a link. Only the judge's copy: the rules keep counting as in 3.2.0.
-JUDGE_LINK_RE = re.compile(r"(?:\b[a-z][a-z0-9+.-]*://|\bmailto:)\S+|(?<![\w@.-])(?:[\w-]+\.)+[^\W\d_]{2,}/\S*",
-                           re.IGNORECASE)
-
-
-def judge_texts(fact, m):
-    """(fact text, words, None) as the judge receives them, or (None, None, why not). The fact as stored; the
-    person's own words — the reply quote left out, a voice transcript unwrapped, links and [service brackets]
-    removed (as phase 0 measured; since 3.3.0's review, links without a scheme too). Neither may hold a secret
-    or an instruction, or run long."""
-    text = fact.get("content") or ""
-    words = JUDGE_LINK_RE.sub(" ", URL_RE.sub(" ", _own_words(m.get("content") or "")))
-    words = re.sub(r"\[[^\]]*\]", " ", words)
-    words = re.sub(r"\s+", " ", words).strip()
-    if not words:
-        return None, None, "empty"
-    if classify_unsafe(text) or classify_unsafe(m.get("content")) or classify_unsafe(words):
-        return None, None, "unsafe"
-    if len(text) > JUDGE_FACT_MAX or len(words) > JUDGE_WORDS_MAX:
-        return None, None, "length"
-    return text, words, None
-
-
-def _decision_diff(a, b):
-    """{section: {"removed": [fact ids], "added": [fact ids]}} between the published sections of two Decisions."""
-    out = {}
-    for name in _DIFF_SECTIONS:
-        x, y = [i["fact_id"] for i in getattr(a, name)], [i["fact_id"] for i in getattr(b, name)]
-        removed, added = [i for i in x if i not in y], [i for i in y if i not in x]
-        if removed or added:
-            out[name] = {"removed": removed, "added": added}
-    return out
-
-
-def _judge_replay(path):
-    """{(provider, fact, words): recorded answer} of a `--judge-replay` file (JSON lines); a broken line, or one
-    whose provider, fact or words is not a text, is skipped."""
-    out = {}
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(rec, dict) and all(isinstance(rec.get(k), str) for k in ("provider", "fact", "words")):
-                out[(rec["provider"], rec["fact"], rec["words"])] = rec
-    return out
-
-
-def _judge_pass(inputs, d, jrun, now):
-    """The judge's part of a night over the pairs *d* (the rules alone) counted: which may be sent, the verdicts
-    (cache, replay or live), and whether the night may apply them. Writes nothing (see _judge_write)."""
-    js, J = SETTINGS.JUDGE, _load_judge()
-    started = time.monotonic()
-    paths = defaultdict(set)
-    for path, pairs in d.counted.items():
-        for p in pairs:
-            paths[p].add(path)
-    facts = {f["fact_id"]: f for f in inputs.facts}
-    messages = {message_key(m): m for m in inputs.messages}
-    # A fact forgotten since the pass loaded it is not sent; the writes look again (see _judge_write).
-    forgotten = {str(i) for i in load_forgotten()} if paths else set()
-    blocked, items = Counter(), []
-    for pair in sorted(paths, key=lambda p: (str(p.fact_id), p.message_key)):
-        fact, m = facts[pair.fact_id], messages[pair.message_key]
-        why = judge_permission(fact, m, js)
-        if why is None and str(pair.fact_id) in forgotten:
-            why = "tombstone"
-        if why is None:
-            text, words, why = judge_texts(fact, m)
-        if why:
-            blocked[why] += 1
-            continue
-        items.append(J.Item(pair, tuple(sorted(paths[pair])), text, words, str(pair.fact_id)))
-    replay = _judge_replay(jrun.replay) if jrun.replay else None
-    try:
-        cache = {}
-        if jrun.files.cache:
-            # Only a live night may move a broken cache aside; a dry run reads around it. A cache that cannot be
-            # read at all raises, and costs the judge's night, not the dream's.
-            cache = _load_state_file(jrun.files.cache) if jrun.live else _read_state_file(jrun.files.cache)[0]
-        night = J.judge(items, js.providers, js.tau, js.max_attempts, js.max_cost_usd, jrun.deadline, cache, now,
-                        live=jrun.live and replay is None, replay=replay, home=HOME)
-    except Exception as exc:  # noqa: BLE001 — the judge is optional: whatever it meets must not cost the night
-        # Only the type: a message may quote what came back. No verdicts, so the night is degraded below.
-        print(f"[dream] warn: the cloud judge failed ({type(exc).__name__}) — no verdicts tonight, the rules "
-              f"decide alone", file=sys.stderr)
-        night = J.Night(verdicts={}, sends=[], attempts=0, cost_usd=0.0, cache_hits=0,
-                        outcomes={p: {} for p in js.providers}, providers_off=set(),
-                        stop_reason=f"error: {type(exc).__name__}", cache_updates={})
-    eligible, judged = Counter(), Counter()
-    for it in items:
-        for path in it.paths:
-            eligible[path] += 1
-            judged[path] += it.pair in night.verdicts
-    covered = sum(it.pair in night.verdicts for it in items)
-    reason = None
-    if set(js.providers) <= night.providers_off:
-        reason = "every provider is off: " + ", ".join(
-            f"{p} {'/'.join(o for o in night.outcomes.get(p, {}) if o != 'ok') or 'off'}" for p in js.providers)
-    elif items and covered / len(items) < JUDGE_MIN_COVERAGE:
-        reason = f"{covered} of {len(items)} pair(s) judged" + (f", stopped: {night.stop_reason}"
-                                                                if night.stop_reason else "")
-    return {"night": night, "items": items, "candidates": len(paths), "blocked": blocked, "cache": cache,
-            "eligible": eligible, "judged": judged, "covered": covered, "reason": reason,
-            "effective": "degraded" if reason else js.mode,
-            "vetoes": frozenset(p for p, v in night.verdicts.items() if v.veto), "started": started}
-
-
-def _judge_stats(jn):
-    """`stats.judge`: what the judge did tonight — counts, no text."""
-    night = jn["night"]
-    return {"mode": SETTINGS.JUDGE.mode, "effective": jn["effective"], "providers": list(SETTINGS.JUDGE.providers),
-            "candidates": jn["candidates"], "eligible": len(jn["items"]),
-            "blocked": dict(sorted(jn["blocked"].items())), "cache_hits": night.cache_hits,
-            "sent": len({s.item.pair for s in night.sends}), "attempts": night.attempts, "outcomes": night.outcomes,
-            "judged": jn["covered"], "vetoes": len(jn["vetoes"]), "uncovered": jn["candidates"] - jn["covered"],
-            "coverage": {p: round(jn["judged"][p] / n, 3) for p, n in sorted(jn["eligible"].items())},
-            "decisions_changed": sum(len(c["removed"]) + len(c["added"]) for c in jn["diff"].values()),
-            "cost_usd": round(night.cost_usd, 6), "seconds": round(time.monotonic() - jn["started"], 2),
-            "stop_reason": night.stop_reason, **({"degraded": jn["reason"]} if jn["reason"] else {})}
-
-
-def _judge_line(st):
-    """The judge's line of the diary and of a dry run."""
-    if st.get("problem"):
-        return f"Judge off: {st['problem'].split(': ', 1)[-1]}."
-    tail = f" — degraded ({st['degraded']}), no veto applied" if st["effective"] == "degraded" else ""
-    return (f"Judge ({st['mode']}): {st['judged']} of {st['eligible']} pair(s) judged, {st['vetoes']} veto(es), "
-            f"{st['decisions_changed']} decision(s) {'would change' if st['mode'] == 'shadow' else 'changed'}; "
-            f"${st['cost_usd']:.4f}{tail}.")
-
-
 def _age_days(stamp, now):
     try:
         when = datetime.fromisoformat(str(stamp))
@@ -5725,288 +4135,89 @@ def _age_days(stamp, now):
     return (now - when).total_seconds() / 86400
 
 
-def _journal_read(path):
-    """The judge's journal records (JSON lines); a line cut short or broken is skipped."""
-    out = []
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(rec, dict) and rec.get("kind") in ("pair", "night"):
-                    out.append(rec)
-    except FileNotFoundError:
-        pass
-    return out
+StateFiles = namedtuple("StateFiles", "asked rejected seen snapshot proposals forget_sweep diary_index diary")
+STATE_NAMES = ("asked.json", "rejected.json", "seen.json", "snapshot.json", "proposals.json", "forget-sweep.json",
+               "diary-index.json", "DREAMS.md")
+# The state files of the night being run (`night()` sets it; the sweeps and the reject list read it).
+STATE = None
 
 
-def _journal_without(records, ids):
-    """The journal without the facts *ids*: their pairs leave; a night record keeps its coverage and loses them."""
-    out = []
-    for rec in records:
-        refs = {str(r) for r in rec.get("fact_refs") or []}
-        diff = rec.get("diff") or {}
-        hit = refs & ids or any(str(i) in ids for c in diff.values() for k in ("removed", "added")
-                                for i in c.get(k) or [])
-        if not hit:
-            out.append(rec)
-        elif rec.get("kind") == "night":
-            kept = {}
-            for name, change in diff.items():
-                left = {k: [i for i in change.get(k) or [] if str(i) not in ids] for k in ("removed", "added")}
-                if left["removed"] or left["added"]:
-                    kept[name] = left
-            out.append(dict(rec, fact_refs=sorted(refs - ids), diff=kept))
-    return out
+def state_files(folder):
+    """The engine's own files in *folder*: cooldowns, the reject list, the loss-guard snapshot, the "merge?"
+    proposals, the forget-sweep record, the diary and its index."""
+    return StateFiles(*(os.path.join(str(folder), name) for name in STATE_NAMES))
 
 
-def _judge_write(files, jn, now, generated_at):
-    """The judge's files after a live night, written like the pass's other state: the cache (tonight's verdicts
-    added, those past their TTL dropped), the journal (tonight's sent pairs and the night appended, 90 days kept),
-    the health record. A fact forgotten while the night ran is left out of all of them. Returns the health alert."""
-    J, js, night = _load_judge(), SETTINGS.JUDGE, jn["night"]
-    forgotten = {str(i) for i in load_forgotten()}
-    alert = None
-    try:
-        for path in (files.cache, files.journal, files.health):
-            if path:
-                os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        if files.cache:
-            merged = J.cache_merge(jn["cache"], night.cache_updates, now, forgotten)
-            _write_private(files.cache, json.dumps(merged, ensure_ascii=False))
-        if files.journal:
-            changed = defaultdict(set)  # fact id -> the sections it moved in or out of
-            for name, change in jn["diff"].items():
-                for fid in change["removed"] + change["added"]:
-                    changed[str(fid)].add(name)
-            records = _journal_read(files.journal)
-            for s in night.sends:
-                v = s.verdict
-                records.append({"kind": "pair", "night": generated_at, "mode": js.mode,
-                                "fact_refs": [s.item.fact_ref], "pair": list(s.item.pair), "paths": list(s.item.paths),
-                                "fact": s.item.fact, "words": s.item.words, "provider": s.provider,
-                                "outcome": s.outcome, "veto": bool(v and v.veto),
-                                **({"label": v.label, "confidence": v.confidence} if v else {}),
-                                "fact_changed": sorted(changed.get(s.item.fact_ref, ()))})
-            records.append({"kind": "night", "night": generated_at, "mode": js.mode, "effective": jn["effective"],
-                            "fact_refs": sorted(changed),
-                            "paths": {p: {"eligible": n, "judged": jn["judged"][p]}
-                                      for p, n in sorted(jn["eligible"].items())},
-                            "diff": jn["diff"]})
-            kept = []
-            for r in _journal_without(records, forgotten):
-                age = _age_days(r.get("night"), now)
-                if age is not None and age <= JUDGE_KEEP_DAYS:
-                    kept.append(r)
-            _write_private(files.journal, "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in kept))
-        if files.health:
-            health = J.health_record(_load_state_file(files.health),
-                                     now.astimezone(SETTINGS.LOCAL_TZ).date().isoformat(), jn["reason"] is not None,
-                                     jn["reason"])
-            alert = J.health_alert(health, now)
-            _write_private(files.health, json.dumps(health, ensure_ascii=False))
-    except OSError as e:
-        print(f"[dream] warn: the judge's files not written: {e}", file=sys.stderr)
-    _judge_expire_manifest(files.manifest, now)
-    return alert
-
-
-def _judge_expire_manifest(path, now):
-    """A review manifest older than JUDGE_KEEP_DAYS goes: its labels never came."""
-    if not path or not os.path.exists(path):
-        return
-    age = _age_days(_read_state_file(path)[0].get("created"), now)
-    if age is not None and age > JUDGE_KEEP_DAYS:
-        try:
-            os.remove(path)
-        except OSError as e:
-            print(f"[dream] warn: old review manifest not removed: {e}", file=sys.stderr)
-
-
-def _judge_off(files, now):
-    """A night with the judge off: the journal of sent pairs and the health record go — nothing is being judged.
-    The cache (hashes, no text) lives out its TTL; a review manifest waits for its labels."""
-    for path in (files.journal, files.health):
-        if path and os.path.exists(path):
-            try:
-                os.remove(path)
-            except OSError as e:
-                print(f"[dream] warn: {path} not removed: {e}", file=sys.stderr)
-    _judge_expire_manifest(files.manifest, now)
-
-
-def judge_export(out):
-    """`--judge-export OUT`: a review sample of the journal — one judged pair per fact, picked at random — with only
-    an id, the fact and the words in OUT. What the judge did with each (and the seed) goes to the manifest, which
-    the person who labels does not get."""
-    J, files = _load_judge(), judge_files()
-    with _sweep_lock(HOME):
-        try:
-            with open(files.journal, "rb") as f:
-                raw = f.read()
-        except (FileNotFoundError, TypeError):
-            raw = b""
-        records = _journal_read(files.journal) if raw else []
-        seed = int.from_bytes(os.urandom(4), "big")
-        rows, entries = J.export_sample(records, seed)
-        if not rows:
-            print("[dream] the judge's journal holds no judged pair to review", file=sys.stderr)
-            return 1
-        manifest = {"version": 1, "created": _now().isoformat(timespec="seconds"), "seed": seed,
-                    "journal_sha256": hashlib.sha256(raw).hexdigest(), "coverage": J.coverage_of(records),
-                    "entries": entries}
-        _write_private(out, "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
-        os.makedirs(os.path.dirname(files.manifest) or ".", exist_ok=True)
-        _write_private(files.manifest, json.dumps(manifest, ensure_ascii=False, indent=1))
-    print(json.dumps({"sample": len(rows), "out": out}, ensure_ascii=False))
-    return 0
-
-
-def judge_score(labels_path):
-    """`--judge-score LABELS`: the labels (JSON lines {"id", "label": S / C / U / ?}) joined with the manifest, and
-    the rule's verdict on them; the manifest goes once every row is labeled."""
-    J, files = _load_judge(), judge_files()
-    with _sweep_lock(HOME):
-        manifest = _read_state_file(files.manifest)[0] if files.manifest else {}
-        entries = manifest.get("entries") or {}
-        if not entries:
-            print("[dream] no review manifest — run --judge-export first", file=sys.stderr)
-            return 1
-        labels = {}
-        with open(labels_path, encoding="utf-8") as f:
-            for line in f:
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(rec, dict) and rec.get("id") in entries and rec.get("label") in ("S", "C", "U", "?"):
-                    labels[rec["id"]] = rec["label"]
-        report = J.readiness([dict(entries[i], label=labels[i]) for i in sorted(labels)],
-                             manifest.get("coverage") or {})
-        report["unlabeled"] = sorted(set(entries) - set(labels))
-        if not report["unlabeled"]:
-            os.remove(files.manifest)
-    print(json.dumps(report, ensure_ascii=False, indent=1))
-    return 0
+def use_state(state):
+    global STATE
+    STATE = state
 
 
 @_message_pass
-def run(window_days, corr_days, md_decay_days, mem_md, asked_state_path=None,
-        rejected_state_path=None, seen_state_path=None, snapshot_state_path=None, judge=None,
-        proposals_state_path=None):
-    state_db = os.path.join(HOME, "state.db")
-    now = _now()
+def night(*, memory, messages, state, acks=None, window_days=14, corr_days=30, md_decay_days=30, now=None):
+    """One night's review. *memory*: a Memory (the notes asked about, the texts only compared against); *messages*:
+    the person's own words (see prepare_messages); *state*: StateFiles; *acks*: {generated_at: [answers]} of the
+    nights a person answered. Reads the fact store read-only, writes only *state*; returns the night's dict."""
+    use_state(state)
+    now = now or _now()
     generated_at = now.isoformat(timespec="seconds")
-    seen = load_seen(seen_state_path)
-    reask_md = _revert_unacked(seen, state_db) if seen_state_path else set()
+    seen = load_seen(state.seen)
+    reask_md = _revert_unacked(seen, acks)
     for name in BUCKETS:
         seen.setdefault(name, {})
-    inputs = load_inputs(window_days, corr_days, mem_md, rejected_state_path=rejected_state_path, seen=seen,
-                         now=now)
-    facts, memory_text, pending_writes = inputs.facts, inputs.memory_text, inputs.pending_writes
-    messages = inputs.by_store[None]  # the trusted ones: shared facts, memory entries, themes
-    staged_removals = _staged_removals(pending_writes)
+    messages = prepare_messages(messages, corr_days, now=now)
+    inputs = load_inputs(window_days, memory, messages, rejected_state_path=state.rejected, seen=seen, now=now)
+    facts, memory_text = inputs.facts, inputs.memory_text
 
     d = _decide(inputs)
-    # The cloud judge (3.3.0): the rules' night gives the candidates; with `veto` (and a night it covered) the
-    # night counted without the vetoed pairs is the one published, with `shadow` it is only compared.
-    judge = judge or JudgeRun(judge_files())
-    judged = None
-    if SETTINGS.JUDGE.mode != "off":
-        judged = _judge_pass(inputs, d, judge, now)
-        vetoed = _decide(inputs, judged["vetoes"]) if judged["vetoes"] else d
-        judged["diff"] = _decision_diff(d, vetoed)
-        if judged["effective"] == "veto":
-            d = vetoed
-    elif judge.live:
-        _judge_off(judge.files, now)
     suppressed, quarantined, expired, expired_ids = d.suppressed, d.quarantined, d.expired, d.expired_ids
     new_facts_window, new_facts, new_facts_dups = d.new_facts_window, d.new_facts, d.new_facts_dups
     new_facts_suppressed = d.new_facts_suppressed
     promotions, promotions_dups, ephemeral_events = d.all_promotions, d.promotions_dups, d.all_ephemeral
-    promotions_suppressed, staged_suppressed = d.promotions_suppressed, d.staged_suppressed
+    promotions_suppressed = d.promotions_suppressed
     conflicts, conflicts_suppressed = d.all_conflicts, d.conflicts_suppressed
     decays, decays_suppressed = d.all_decays, d.decays_suppressed
     feedback, feedback_suppressed = d.trust_feedback, d.feedback_suppressed
     keywords_needed, keywords_pending, confirm = d.keywords_needed, d.keywords_pending, d.confirm
     themes = _new_themes(messages, window_days, facts, memory_text)
-
-    # Not called on a night without messages: every entry would be "never mentioned", and asking records it asked.
-    md_dec = [] if inputs.messages_unavailable else md_decays(
-        mem_md, messages, md_decay_days, asked_state_path, cap=SETTINGS.PUBLISH_CAP,
-        staged_removals=staged_removals, reask=reask_md, rules=inputs.rules)
+    md_dec = md_decays(memory, messages, md_decay_days, state.asked, cap=SETTINGS.PUBLISH_CAP, reask=reask_md,
+                       rules=inputs.rules)
 
     # Only published slices count as shown.
     published_promotions = promotions[:SETTINGS.PUBLISH_CAP]
     published_decays = decays[:SETTINGS.PUBLISH_CAP]
     published_conflicts = conflicts[:SETTINGS.PUBLISH_CAP]
-    # Duplicates across the store (3.4.0): one question about a fact a night — a fact in tonight's promotions,
-    # conflicts or relevance questions (or hidden behind one of them) is not asked about as a duplicate too.
+    # One question about a fact a night: a fact in tonight's promotions, conflicts or relevance questions (or hidden
+    # behind one of them) is not asked about as a duplicate too.
     busy = {i for s in published_promotions + published_conflicts + published_decays
             for i in (s["fact_id"], *s.get("duplicates", ()))}
-    dups = duplicate_pairs_night(inputs, d, busy, seen, proposals_state_path if seen_state_path else None, now,
-                                 write=bool(seen_state_path))
-    if seen_state_path:
-        _mark_shown(seen, now, new_facts=new_facts + new_facts_dups, promotions=published_promotions,
-                    trust_feedback=feedback, keywords_needed=keywords_needed, confirm=confirm,
-                    fact_decays=published_decays, conflicts=published_conflicts)
-    # The queue alert stamps its own cooldown into `seen`: computed before the state is written, or the stamp
-    # never reached the file and the same alert woke the agent every night (Codex review of 2.7.2).
-    queue_alert = pending_alert(pending_writes, seen, now) if seen_state_path else None
-    if seen_state_path:
-        # What this pass is about to show, keyed for `_revert_unacked` tomorrow.
-        fp = _fact_fingerprint
-        seen["_pending"] = {
-            "generated_at": generated_at,
-            "seen": {"new_facts": [fp(s["content"]) for s in new_facts + new_facts_dups],
-                     "fact_decays": [fp(s["content"]) for s in published_decays],
-                     "conflicts": [fp(s["content"]) for s in published_conflicts],
-                     "promotions": [fp(s["content"]) for s in published_promotions],
-                     # Ride-along sections are marked even when nothing else woke the agent; without an entry
-                     # here a night the gate kept shut still rested them for the whole cooldown (Codex review
-                     # of 2.7.2).
-                     "trust_feedback": [_feedback_key(i) for i in feedback],
-                     "keywords_needed": [_feedback_key(i) for i in keywords_needed],
-                     "confirm": [_feedback_key(i) for i in confirm],
-                     # The pairs put to the human tonight (3.4.0); the answer must name their numbers.
-                     **({"duplicate_pairs": dups.pending} if dups.pending else {})},
-            "asked": [d["key"] for d in md_dec if d.get("key")],
-        }
-        try:
-            _write_private(seen_state_path, json.dumps(seen, ensure_ascii=False, indent=1))
-        except OSError as e:
-            print(f"[dream] warn: seen-state not written: {e}", file=sys.stderr)
+    dups = duplicate_pairs_night(inputs, d, busy, seen, state.proposals, now, write=True)
+    _mark_shown(seen, now, new_facts=new_facts + new_facts_dups, promotions=published_promotions,
+                trust_feedback=feedback, keywords_needed=keywords_needed, confirm=confirm,
+                fact_decays=published_decays, conflicts=published_conflicts)
+    # What this night is about to show, keyed for `_revert_unacked` tomorrow.
+    fp = _fact_fingerprint
+    seen["_pending"] = {
+        "generated_at": generated_at,
+        "seen": {"new_facts": [fp(s["content"]) for s in new_facts + new_facts_dups],
+                 "fact_decays": [fp(s["content"]) for s in published_decays],
+                 "conflicts": [fp(s["content"]) for s in published_conflicts],
+                 "promotions": [fp(s["content"]) for s in published_promotions],
+                 "trust_feedback": [_feedback_key(i) for i in feedback],
+                 "keywords_needed": [_feedback_key(i) for i in keywords_needed],
+                 "confirm": [_feedback_key(i) for i in confirm],
+                 # The pairs put to the person tonight; the answer must name their numbers.
+                 **({"duplicate_pairs": dups.pending} if dups.pending else {})},
+        "asked": [m["key"] for m in md_dec if m.get("key")],
+    }
+    _write_private(state.seen, json.dumps(seen, ensure_ascii=False, indent=1))
 
-    judge_alert, judge_stats = None, None
-    if judged is not None:
-        if judge.live:
-            judge_alert = _judge_write(judge.files, judged, now, generated_at)
-        judge_stats = _judge_stats(judged)
-        print(f"[dream] {_judge_line(judge_stats)}", file=sys.stderr)
-    elif SETTINGS.JUDGE.problem:
-        judge_stats = {"mode": "off", "problem": SETTINGS.JUDGE.problem}
-
-    usage = memory_usage(mem_md)
-    alerts = check_memory_loss(mem_md, snapshot_state_path, memory_text)
-    if inputs.messages_unavailable:
-        alerts.append({"kind": "messages_unavailable",
-                       "message": "The conversations (state.db) could not be read tonight — busy or locked. Nothing "
-                                  "was corroborated and no relevance question was asked; the next pass tries again."})
-    if queue_alert:
-        alerts.append(queue_alert)
-    if judge_alert:
-        alerts.append(judge_alert)
+    alerts = check_memory_loss(memory, state.snapshot, memory_text)
     if dups.alert:
         alerts.append(dups.alert)
-    store_note = fact_store_note()
-    chat_stores = chat_stores_overview(window_days)
     diary = build_diary(window_days, len(facts), len(messages), promotions, decays, themes, md_dec,
-                        ephemeral_events, quarantined, len(suppressed), conflicts=published_conflicts,
-                        alerts=alerts, note=store_note, chat_stores=chat_stores, judge=judge_stats)
-
-    memory_sources = load_durable_memory_sources(mem_md)
+                        ephemeral_events, quarantined, len(suppressed), conflicts=published_conflicts, alerts=alerts)
+    memory_sources = load_durable_memory_sources(memory)
 
     def _pub_near(s):
         item = _pub(s)
@@ -6015,8 +4226,8 @@ def run(window_days, corr_days, md_decay_days, mem_md, asked_state_path=None,
             item["nearest_entry"] = near
         return item
 
-    for d in md_dec:
-        d.pop("key", None)  # internal handle, not for the agent
+    for m in md_dec:
+        m.pop("key", None)  # internal handle, not for the caller
 
     result = {
         "generated_at": generated_at,
@@ -6024,11 +4235,8 @@ def run(window_days, corr_days, md_decay_days, mem_md, asked_state_path=None,
         "weights": SETTINGS.WEIGHTS,
         "gates": {"min_score": SETTINGS.MIN_SCORE, "min_mentions": SETTINGS.MIN_MENTIONS,
                   "promotion_corroboration": "2 ref_days OR min_mentions OR 3 retrievals + 1 helpful",
-                  # The store's own recall floor (provider `min_trust_threshold` unless
-                  # overridden here): what `trust_feedback` has to push a fact below.
                   "feedback_trust_floor": feedback_floor()},
         "stats": {"facts": len(facts), "new_facts_reviewed": len(new_facts),
-                  # holographic >= 0.8.0: the store takes change / end / correct / forget (SKILL.md, step 7).
                   "fact_history": fact_history_supported(),
                   "new_facts_window": len(new_facts_window),
                   "messages_window": len(messages),
@@ -6036,19 +4244,11 @@ def run(window_days, corr_days, md_decay_days, mem_md, asked_state_path=None,
                   "fact_decays": len(decays), "md_decays": len(md_dec), "themes": len(themes),
                   "conflicts": len(conflicts),
                   "quarantined": len(quarantined),
-                  # Informational: silenced by the reject list / cooldown / expiry,
-                  # or hidden behind a near-duplicate twin in the store.
-                  # Not work — never in the precheck's actionable keys.
                   "rejected_suppressed": len(suppressed),
                   "new_facts_suppressed": new_facts_suppressed,
                   "promotions_suppressed": promotions_suppressed,
-                  # Informational, never actionable: a staged write is the
-                  # human's queue, not the agent's work.
-                  "staged_suppressed": staged_suppressed,
-                  "pending_writes": len(pending_writes),
                   "trust_feedback": len(feedback),
                   "trust_feedback_suppressed": feedback_suppressed,
-                  # Tonight's slice and the whole backlog of facts without keywords.
                   "keywords_needed": len(keywords_needed),
                   "keywords_missing": len(keywords_pending),
                   "confirm": len(confirm),
@@ -6056,25 +4256,17 @@ def run(window_days, corr_days, md_decay_days, mem_md, asked_state_path=None,
                   "conflicts_suppressed": conflicts_suppressed,
                   "expired_events": len(expired_ids),
                   "store_duplicates": len(promotions_dups) + len(new_facts_dups),
-                  # Duplicates across the store (3.4.0): found, put to the human, resting (cooldown or "these
-                  # are different"), left for another night — or why the search did not run.
                   **dups.stats,
                   "alerts": len(alerts)},
-        "memory_usage": usage,
         "alerts": alerts,
         "promotions": [_pub_near(s) for s in published_promotions],
         "new_facts": [_pub_near(s) for s in new_facts],
         "ephemeral_events": [_pub(s) for s in ephemeral_events[:SETTINGS.PUBLISH_CAP]],
-        # Read-only: never in `precheck.actionable_keys`, so it opens no gate.
         "expired_events": [_pub(s) for s in expired[:SETTINGS.PUBLISH_CAP]],
-        # Not in `precheck.actionable_keys` by default: a trust nudge is worth
-        # doing when the agent is already awake, not worth waking it for.
         "trust_feedback": feedback,
-        # Not actionable either: keywords are worth adding while awake.
         "keywords_needed": keywords_needed,
-        # Not actionable either: people said these again on different days.
         "confirm": confirm,
-        "fact_decays": [_pub(s) for s in decays[:SETTINGS.PUBLISH_CAP]],
+        "fact_decays": [_pub(s) for s in published_decays],
         "conflicts": [dict(_pub_near(s), conflicts=s["conflicts"]) for s in published_conflicts],
         "md_decays": md_dec,
         "emerging_themes": themes[:SETTINGS.PUBLISH_CAP],
@@ -6082,18 +4274,12 @@ def run(window_days, corr_days, md_decay_days, mem_md, asked_state_path=None,
         "diary": diary,
     }
     if dups.items:
-        # "Merge?" questions (3.4.0): both texts whole, the proposal number the human answers to.
         result["duplicate_pairs"] = dups.items
-    if judge_stats:
-        result["stats"]["judge"] = judge_stats  # counts only; present when the judge is on (or set but broken)
-    # Present only when there is something to say: a single shared store keeps the output it always had.
-    if store_note:
-        result["fact_store_note"] = store_note  # why the fact store cannot fill up; not work
-    if chat_stores:
-        result["chat_stores"] = chat_stores  # per-chat databases: counts, which are promoted, which are missing
-    if SETTINGS.CONFIG.get("task_outcomes") is True:
-        # Counts/enums only: no new copy of corrections, source text, or attempt/fact identifiers in state/diary.
-        result["task_outcomes"] = memory_experience()
+    scrub_result(result)  # a fact forgotten while the night ran never reaches its output
+    try:
+        append_diary(state.diary, result["diary"])
+    except OSError as e:
+        print(f"[dream] warn: diary not written: {e}", file=sys.stderr)
     return result
 
 
@@ -6166,24 +4352,8 @@ def _safe_preview(text, n, redacted=REDACTED):
     return (text or "")[:n]
 
 
-def chat_stores_line(cs):
-    """One line on the per-chat databases: how many, how many facts, which are promoted, which are missing."""
-    rows = cs.get("stores") or []
-    total = sum(r.get("facts", 0) for r in rows)
-    new = sum(r.get("new", 0) for r in rows)
-    promoted = [r["store"] for r in rows if r.get("promote")]
-    line = (f"Chat stores ({cs.get('scope')}): {len(rows)} database(s), {total} fact(s), {new} new in the window"
-            + (f"; promoted: {', '.join(promoted)}" if promoted else "; none promoted"))
-    if cs.get("missing"):
-        line += f"; listed but not found: {', '.join(cs['missing'])}"
-    if cs.get("note"):
-        line += f" — {cs['note']}"
-    return line + "."
-
-
 def build_diary(window, nfacts, nmsgs, promotions, decays, themes, md_dec, ephemeral_events=None,
-                quarantined=None, suppressed=0, conflicts=None, alerts=None, note=None, chat_stores=None,
-                judge=None):
+                quarantined=None, suppressed=0, conflicts=None, alerts=None):
     ephemeral_events = ephemeral_events or []
     quarantined = quarantined or []
     conflicts = conflicts or []
@@ -6191,12 +4361,6 @@ def build_diary(window, nfacts, nmsgs, promotions, decays, themes, md_dec, ephem
              f"Theme window: {window} d · facts: {nfacts} · messages (corroboration): {nmsgs}.", ""]
     for a in alerts or []:
         lines.append(f"⚠️ {a.get('message')}")
-    if note:
-        lines.append(f"ℹ️ {note}.")
-    if chat_stores and chat_stores.get("stores") is not None:
-        lines.append(chat_stores_line(chat_stores))
-    if judge:
-        lines.append(_judge_line(judge))
 
     def _line(p):
         if "meta" in p:
@@ -6218,7 +4382,7 @@ def build_diary(window, nfacts, nmsgs, promotions, decays, themes, md_dec, ephem
     if themes:
         lines.append("\n**Emerging themes:** " + ", ".join(f"{t['theme']}×{t['mentions']}" for t in themes[:8]))
     if md_dec:
-        lines.append(f"\n**MEMORY.md entries not surfaced for long ({len(md_dec)}):** "
+        lines.append(f"\n**Memory notes not surfaced for long ({len(md_dec)}):** "
                      + "; ".join(d["entry"][:45] for d in md_dec[:3]))
     if decays:
         lines.append(f"\n**Facts never used ({len(decays)}):** "
@@ -6406,18 +4570,14 @@ def append_diary(path, diary):
 # ---------------------------------------------------------------------------
 # `fact_store forget` deletes a fact from the store for good and leaves a
 # tombstone in its `forgotten` table: the id, never the text. The copies this
-# skill made are this skill's to clean, by that id: the last payload
-# (cache/dream.json), the reject list, the "already shown" state, the diary and
-# its archive, and the logs of the dream cron jobs (they hold the payload).
+# engine made are the engine's to clean, by that id: the reject list, the
+# "already shown" state, the "merge?" proposals, the diary and its archive.
 # Diary lines written since 2.4.0 end with "[#<fact_id>]"; older ones carry no
 # id and are found through the diary index — hashes of the previews the diary
 # writes, kept for every fact while it still exists (the text is gone after the
 # forget, so the index is built ahead of time, on every pass and every sweep).
 
 DIARY_TAG_RE = re.compile(r"\s*\[#((?:[A-Za-z0-9_.-]+#)?\d+)\]")
-DREAM_JOB_SCRIPTS = ("dream-precheck.py", "dream-extract-precheck.py")
-
-
 def _diary_tag(item):
     fact_id = item.get("fact_id")
     return f" [#{fact_id}]" if isinstance(fact_id, int) or FACT_ID_RE.fullmatch(str(fact_id or "")) else ""
@@ -6444,48 +4604,17 @@ def _preview_hashes(content):
 
 
 def load_forgotten(db=None, errors=None):
-    """{fact_id: forgotten_at} from the store's tombstones; {} when the source is not holographic, the store
-    is missing, or the provider is older than 0.8.0 (no `forgotten` table)."""
-    if fact_source() != "holographic" and not db:
-        return {}
+    """{fact_id: forgotten_at} from the store's tombstones; {} without a store or without a `forgotten` table."""
     path = db or fact_store_path()
-    if not path:  # the store's settings cannot be read for sure: not "nothing was forgotten" either
-        msg = "plugins.hermes-memory-store of config.yaml cannot be read for sure — tombstones not read"
-        if errors is not None:
-            errors.append(msg)
-        else:
-            print(f"[dream] warn: {msg}", file=sys.stderr)
     try:
-        out = _tombstones(path)
+        return _tombstones(path)
     except sqlite3.Error as exc:
-        # Unreadable is not "nothing was forgotten": the gate used to exit clean and silent while the copies
-        # stayed (Codex review of 2.7.2). Reported like a chat store's error; the next run tries again.
-        out = {}
+        # Unreadable is not "nothing was forgotten": reported, and the next run tries again.
         if errors is not None:
             errors.append(f"{path}: {exc}")
         else:
             print(f"[dream] warn: tombstones of the fact store unreadable: {exc}", file=sys.stderr)
-    if not db:  # and those of the chat stores promoted now or before, as "<key>#<id>"
-        stores = list_chat_stores()
-        for key in sorted(sweep_stores() & set(stores)):
-            try:
-                out.update({f"{key}#{i}": at for i, at in _tombstones(stores[key]).items()})
-            except sqlite3.Error as exc:  # one chat's database must not stop the others' sweep
-                if errors is not None:
-                    errors.append(f"{stores[key]}: {exc}")
-                else:
-                    print(f"[dream] warn: tombstones of chat store {key} unreadable: {exc}", file=sys.stderr)
-    return out
-
-
-def sweep_stores():
-    """Chat stores whose tombstones are read: the ones promoted now and every one promoted before — a fact copied
-    while its chat was listed must still be swept after the chat leaves the list (review 2026-10-13)."""
-    keys = set(chat_stores_settings()[1])
-    path = _state_default("DREAM_FORGET_STATE", "forget_sweep")
-    if path:
-        keys |= set(_read_state_file(path)[0].get("stores") or [])  # a reader: never moves a file
-    return keys
+        return {}
 
 
 def _tombstones(path):
@@ -6720,33 +4849,6 @@ def scrub_result(result):
             + _scrub_copies(result, _preview_set(index), _fingerprint_set(index)))
 
 
-def _dream_job_dirs(home, errors):
-    """Output folders of the cron jobs that run the dream gates (their logs hold the payload). Hermes' own
-    `cron/jobs.json` is read as is, never moved aside. No file: no cron jobs. A file that cannot be read, or is not
-    `{"jobs": [...]}`, goes to `errors`: read as "no jobs", the logs were never looked at and a forgotten fact stayed
-    in them while the sweep reported success (review of 3.3.1)."""
-    path = os.path.join(home, "cron", "jobs.json")
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        return []
-    except (OSError, ValueError) as exc:
-        errors.append(f"{path}: cannot be read ({exc}) — the dream's cron logs were not checked")
-        return []
-    jobs = data.get("jobs") if isinstance(data, dict) else None
-    if not isinstance(jobs, list):
-        errors.append(f"{path}: no list of jobs in it — the dream's cron logs were not checked")
-        return []
-    out = []
-    for job in jobs:
-        job = job if isinstance(job, dict) else {}
-        script = os.path.basename(str(job.get("script") or ""))
-        if script in DREAM_JOB_SCRIPTS and job.get("id"):
-            out.append(os.path.join(home, "cron", "output", str(job["id"])))
-    return out
-
-
 _JSON_STRING_RE = re.compile(r'"((?:[^"\\\n]|\\.){20,})"')
 
 
@@ -6757,57 +4859,23 @@ def _json_string(literal):
         return literal
 
 
-@contextlib.contextmanager
-def _sweep_lock(home, wait=True):
-    """One writer of the dream's state at a time: the nightly pass and the forget gate both rewrite it. POSIX
-    advisory lock on cache/dream-state.lock; a no-op where fcntl does not exist. Yields whether the lock is held:
-    with `wait=False` a held lock is not waited for (the gate runs under a timeout, and the pass that holds the
-    lock sweeps before it starts and scrubs its output after — nothing is left for the gate)."""
-    try:
-        import fcntl
-    except ImportError:
-        yield True
-        return
-    path = os.path.join(home, "cache", "dream-state.lock")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "a") as handle:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
-        except (BlockingIOError, PermissionError):
-            yield False
-            return
-        try:
-            yield True
-        finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
-
-
-def forget_sweep(db=None, home=None):
+def forget_sweep(db=None):
     """Clean this skill's copies of facts the store has forgotten (see the section comment). Every run looks for
     every tombstone again, so a copy written back by a pass that loaded the fact before it was forgotten, or a
     file that could not be removed last time, is caught on the next run; with nothing left the run changes
     nothing. Also refreshes the diary index from the current facts, so a fact forgotten later can still be found
     in old lines. `errors` lists what could not be cleaned (the gate then fails and is retried)."""
-    home = home or HOME
-    index_path = _state_default("DREAM_DIARY_INDEX", "diary_index")
-    state_path = _state_default("DREAM_FORGET_STATE", "forget_sweep")
+    index_path = STATE.diary_index
+    state_path = STATE.forget_sweep
     state = _load_state_file(state_path)
-    # Chat stores promoted now join the remembered ones before anything else, and the record is saved at once:
-    # their facts may already be in the payload, and the run may end early below.
-    promoted = sorted(set(state.get("stores") or []) | chat_stores_settings()[1])
-    if state_path and promoted != sorted(state.get("stores") or []):
-        state["stores"] = promoted
-        os.makedirs(os.path.dirname(state_path) or ".", exist_ok=True)
-        _write_private(state_path, json.dumps(state, ensure_ascii=False))
     state_before = json.dumps(state, sort_keys=True)
     store_errors = []
     tombstones = load_forgotten(db, errors=store_errors)
-    _index_current_facts(db, home, index_path)
+    _index_current_facts(db, index_path)
     done = state.setdefault("swept", {})
     new = sorted(str(i) for i in tombstones if str(i) not in done)
-    summary = {"tombstones": len(tombstones), "swept": len(new), "payload": 0, "rejected": 0, "seen": 0,
-               "proposals": 0, "judge": 0, "diary_lines": 0, "cron_logs": 0, "corrupt_copies": 0,
-               "errors": store_errors}
+    summary = {"tombstones": len(tombstones), "swept": len(new), "rejected": 0, "seen": 0, "proposals": 0,
+               "diary_lines": 0, "corrupt_copies": 0, "errors": store_errors}
     if not tombstones:
         return summary
     ids = {str(i) for i in tombstones}
@@ -6821,20 +4889,17 @@ def forget_sweep(db=None, home=None):
                     | {fp for i in ids for fp in (done.get(i) or {}).get("fingerprints", [])}
                     | {fp for i in ids for fp in (merged.get(i) or {}).get("fingerprints", [])})
 
-    # Each copy in turn, in this order: the night's payload, the reject list, the cooldowns, the diary, the logs, and
-    # last the broken state files set aside — the loads above may have just set one aside.
-    summary["payload"] = _sweep_payload(home, ids, index, fingerprints)
+    # Each copy in turn, in this order: the reject list, the cooldowns, the proposals, the diary, and last the broken
+    # state files set aside — the loads above may have just set one aside.
     summary["rejected"] = _sweep_rejected(ids, fingerprints)
     summary["seen"] = _sweep_seen(ids, fingerprints)
     summary["proposals"] = _sweep_proposals(ids, fingerprints)
-    summary["judge"] = _sweep_judge(ids)
-    summary["diary_lines"] = _sweep_diary(home, ids, index, summary["errors"])
-    summary["cron_logs"] = _sweep_cron_logs(home, ids, index, summary["errors"])
+    summary["diary_lines"] = _sweep_diary(ids, index, summary["errors"])
     # A wipe that did not finish (a copy that could not be deleted) is owed until it does: the tombstone is recorded
     # as swept below, and without this a fragment in a copy kept on a failed run would never be looked for again.
     wipe_all = bool(new) or bool(state.get("corrupt_wipe_owed"))
     errors_before = len(summary["errors"])
-    summary["corrupt_copies"] = _sweep_corrupt_copies(home, ids, index, fingerprints, wipe_all, summary["errors"])
+    summary["corrupt_copies"] = _sweep_corrupt_copies(ids, index, fingerprints, wipe_all, summary["errors"])
     if wipe_all and len(summary["errors"]) > errors_before:
         state["corrupt_wipe_owed"] = True
     else:
@@ -6859,18 +4924,17 @@ def forget_sweep(db=None, home=None):
     return summary
 
 
-def _index_current_facts(db, home, index_path):
-    """The diary index refreshed from the facts the stores hold now (`forget_sweep`). A store that cannot be read
+def _index_current_facts(db, index_path):
+    """The diary index refreshed from the facts the store holds now (`forget_sweep`). A store that cannot be read
     leaves the index as it was, with a warning: the sweep itself goes on."""
-    facts = []
-    store = db or (fact_store_path() if fact_source() == "holographic" else None)
-    if store and os.path.exists(store):
-        try:
-            facts += _load_holographic(store)
-        except (sqlite3.Error, OSError) as exc:
-            print(f"[dream] warn: diary index not updated for the shared store: {exc}", file=sys.stderr)
-    if not db:
-        facts += load_chat_facts(home)  # indexed even without a shared store (scope chat may have none)
+    store = db or fact_store_path()
+    if not store or not os.path.exists(store):
+        return
+    try:
+        facts = _load_holographic(store)
+    except (sqlite3.Error, OSError) as exc:
+        print(f"[dream] warn: diary index not updated: {exc}", file=sys.stderr)
+        return
     if facts:
         try:
             update_diary_index(index_path, facts)
@@ -6878,22 +4942,9 @@ def _index_current_facts(db, home, index_path):
             print(f"[dream] warn: diary index not updated: {exc}", file=sys.stderr)
 
 
-def _sweep_payload(home, ids, index, fingerprints):
-    """Forgotten facts out of the night's payload `cache/dream.json`; how many items and strings went."""
-    payload_path = os.path.join(home, "cache", "dream.json")
-    payload = _load_state_file(payload_path)
-    if not payload:
-        return 0
-    removed = (_drop_fact_items(payload, ids) + _scrub_strings(payload, ids, index)
-               + _scrub_copies(payload, _preview_set(index), fingerprints))
-    if removed:
-        _write_private(payload_path, json.dumps(payload, ensure_ascii=False, indent=2))
-    return removed
-
-
 def _sweep_rejected(ids, fingerprints):
     """Records of forgotten facts out of the reject list; how many."""
-    rejected_path = _state_default("DREAM_REJECTED_STATE", "rejected")
+    rejected_path = STATE.rejected
     rejected = _load_state_file(rejected_path)
     gone = [k for k, rec in rejected.items()
             if k in fingerprints or (isinstance(rec, dict) and str(rec.get("fact_id")) in ids)]
@@ -6907,7 +4958,7 @@ def _sweep_rejected(ids, fingerprints):
 def _sweep_seen(ids, fingerprints, skip=()):
     """Forgotten facts out of the cooldowns and out of what tonight's pass showed (`_pending`); how many. *skip*:
     buckets left as they are (the merge sweep keeps `dup_not`: "these are different" outlives a merge)."""
-    seen_path = _state_default("DREAM_SEEN_STATE", "seen")
+    seen_path = STATE.seen
     seen = _load_state_file(seen_path)
     removed = 0
     gone_keys = set()  # keys of the records removed: a pair's key (3.4.0) is no fingerprint of a fact
@@ -6936,7 +4987,7 @@ def _sweep_seen(ids, fingerprints, skip=()):
 
 def _sweep_proposals(ids, fingerprints):
     """Merge proposals (3.4.0) that hold a forgotten fact, removed whole — they carry its text; how many."""
-    path = proposals_path()
+    path = STATE.proposals
     if not path or not os.path.exists(path):
         return 0
     data = load_proposals(path)
@@ -6951,39 +5002,11 @@ def _sweep_proposals(ids, fingerprints):
     return len(gone)
 
 
-def _sweep_judge(ids):
-    """Forgotten facts out of the cloud judge's files, read here without the judge (it may be off): their verdicts
-    in the cache, their pairs in the journal (and their ids in its night records), their rows in a review manifest;
-    how many records. A broken journal line goes too: it may hold a fact cut short."""
-    files = judge_files()
-    removed = 0
-    for path in (files.cache, files.manifest):
-        data = _load_state_file(path)
-        entries = data.get("entries") if isinstance(data.get("entries"), dict) else {}
-        gone = [k for k, rec in entries.items() if isinstance(rec, dict) and str(rec.get("fact_ref")) in ids]
-        for key in gone:
-            entries.pop(key)
-        if gone:
-            _write_private(path, json.dumps(data, ensure_ascii=False))
-            removed += len(gone)
-    if files.journal and os.path.exists(files.journal):
-        with open(files.journal, encoding="utf-8", errors="replace") as f:
-            lines = [line for line in f.read().splitlines() if line.strip()]
-        records = _journal_read(files.journal)
-        kept = _journal_without(records, ids)
-        broken = len(lines) - len(records)
-        pairs = sum(r.get("kind") == "pair" for r in records) - sum(r.get("kind") == "pair" for r in kept)
-        if kept != records or broken:
-            removed += pairs + broken
-            _write_private(files.journal, "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in kept))
-    return removed
-
-
-def _sweep_diary(home, ids, index, errors):
+def _sweep_diary(ids, index, errors):
     """Lines about forgotten facts out of the diary and its archive; how many. What cannot be read goes to
     `errors`."""
     removed_all = 0
-    diary = os.path.join(home, SETTINGS.DIARY_PATH)
+    diary = STATE.diary
     for path in (diary, diary + ".archive.md"):
         try:
             with open(path, encoding="utf-8") as f:
@@ -7000,37 +5023,7 @@ def _sweep_diary(home, ids, index, errors):
     return removed_all
 
 
-def _sweep_cron_logs(home, ids, index, errors):
-    """Logs of the dream's own cron jobs that carry a forgotten fact, removed; how many. What cannot be read or
-    removed goes to `errors`."""
-    removed = 0
-    pattern = re.compile(r'"fact_id"\s*:\s*"?((?:[A-Za-z0-9_.-]+#)?\d+)\b')
-    for folder in _dream_job_dirs(home, errors):
-        try:
-            names = os.listdir(folder)
-        except FileNotFoundError:
-            continue
-        except OSError as exc:
-            errors.append(f"{folder}: {exc}")
-            continue
-        hashes = _preview_set(index)
-        for name in names:
-            path = os.path.join(folder, name)
-            try:
-                with open(path, encoding="utf-8", errors="replace") as f:
-                    text = f.read()
-                # By id, and by a verbatim copy in any JSON string of the log: logs of the extraction pass before
-                # 2.7.3 carried `existing_facts` as bare strings, and a memory entry rides without an id.
-                if set(pattern.findall(text)) & ids or any(
-                        _carries_forgotten(_json_string(lit), hashes) for lit in _JSON_STRING_RE.findall(text)):
-                    os.remove(path)
-                    removed += 1
-            except OSError as exc:
-                errors.append(f"{path}: {exc}")
-    return removed
-
-
-def _sweep_corrupt_copies(home, ids, index, fingerprints, wipe_all, errors):
+def _sweep_corrupt_copies(ids, index, fingerprints, wipe_all, errors):
     """Broken state files moved aside (`_load_state_file`) that may still hold a forgotten fact, removed; how many.
     What cannot be read or removed goes to `errors`.
 
@@ -7041,16 +5034,8 @@ def _sweep_corrupt_copies(home, ids, index, fingerprints, wipe_all, errors):
     wipe still owed): every set-aside copy goes — the human's "forget it" outweighs the evidence. Otherwise a copy is
     deleted when it mentions a forgotten fact by its id, its fingerprint or its verbatim text (a live file is cleaned
     on every run, so a later copy of it is clean)."""
-    state_files = {p for p in (_state_default("DREAM_REJECTED_STATE", "rejected"),
-                               _state_default("DREAM_SEEN_STATE", "seen"),
-                               os.path.join(home, "cache", "dream.json"),
-                               _state_default("DREAM_DIARY_INDEX", "diary_index"),
-                               _state_default("DREAM_FORGET_STATE", "forget_sweep"),
-                               _state_default("DREAM_ASKED_STATE", "asked"),
-                               _state_default("DREAM_SNAPSHOT_STATE", "snapshot"),
-                               proposals_path(),
-                               *judge_files(),
-                               os.path.join(home, "cache", "dream-extract-state.json")) if p}
+    state_files = {p for p in (STATE.rejected, STATE.seen, STATE.diary_index, STATE.forget_sweep, STATE.asked,
+                               STATE.snapshot, STATE.proposals) if p}
     pattern = re.compile(r'"fact_id"\s*:\s*"?((?:[A-Za-z0-9_.-]+#)?\d+)\b')
     hashes = _preview_set(index)
     by_dir = defaultdict(set)
@@ -7092,11 +5077,10 @@ def _sweep_corrupt_copies(home, ids, index, fingerprints, wipe_all, errors):
 # and is idempotent: a second run finds nothing. A later `forget` of the keep leaves a tombstone for every id of
 # the group, and the forget sweep then cleans the rest as for any forgotten fact.
 
-def merge_sweep(db=None, home=None):
+def merge_sweep(db=None):
     """Clean this skill's live state of facts merged into others (see the section comment); counts of what went,
     {} when the store keeps no merges."""
-    home = home or HOME
-    path = db or (fact_store_path() if fact_source() == "holographic" else None)
+    path = db or fact_store_path()
     if not path or not os.path.exists(path):
         return {}
     c = _conn(path)
@@ -7116,12 +5100,11 @@ def merge_sweep(db=None, home=None):
         kept = {_fact_fingerprint(t) for (t,) in c.execute("select content from facts")}
     finally:
         c.close()
-    summary = {"merged": len(merges), "payload": 0, "proposals": 0, "seen": 0, "rejected": 0, "index": 0,
-               "judge": 0}
+    summary = {"merged": len(merges), "proposals": 0, "seen": 0, "rejected": 0, "index": 0}
     if not merges:
         return summary
     ids = {str(i) for i in merges}
-    index_path = _state_default("DREAM_DIARY_INDEX", "diary_index")
+    index_path = STATE.diary_index
     index = _load_state_file(index_path) if index_path else {}
     # The copies' fingerprints, but never one a current fact has: a copy that differed from its keep only in case
     # or spaces shares the keep's key, and the keep's records stay.
@@ -7129,13 +5112,7 @@ def merge_sweep(db=None, home=None):
                     | {fp for i in ids for fp in (index.get(i) or {}).get("fingerprints", [])}) - kept
     now = _now()
 
-    payload_path = os.path.join(home, "cache", "dream.json")
-    payload = _load_state_file(payload_path)
-    if payload:
-        summary["payload"] = _drop_fact_items(payload, ids)
-        if summary["payload"]:
-            _write_private(payload_path, json.dumps(payload, ensure_ascii=False, indent=2))
-    ppath = proposals_path()
+    ppath = STATE.proposals
     if ppath and os.path.exists(ppath):
         data = load_proposals(ppath)
         before = {k: r.get("status") for k, r in data["proposals"].items()}
@@ -7150,7 +5127,6 @@ def merge_sweep(db=None, home=None):
     if index_path and any(i in index for i in ids):
         summary["index"] = sum(1 for i in ids if index.pop(i, None) is not None)
         _write_private(index_path, json.dumps(index, ensure_ascii=False))
-    summary["judge"] = _sweep_judge(ids)
     return summary
 
 
@@ -7158,7 +5134,7 @@ def _archive_merged(ids, index, history):
     """Keep the hashes of merged copies for the forget sweep (`merged` in its state): the previews and fingerprints
     the diary index held for each id in *ids*, and those of every text in *history* ({id: {texts}}). Hashes only,
     never text; a copy forgotten later moves on from here to `swept`."""
-    state_path = _state_default("DREAM_FORGET_STATE", "forget_sweep")
+    state_path = STATE.forget_sweep
     if not state_path:
         return
     state = _load_state_file(state_path)
@@ -7186,8 +5162,8 @@ def _archive_merged(ids, index, history):
 def forgotten_diary_index(ids):
     """{fact_id: {"previews": [...], "fingerprints": [...]}} for *ids*: from the sweep state once swept, else from
     the diary index — what scrub_diary_text needs to clean another copy of the diary (a backup) of those facts."""
-    index_path = _state_default("DREAM_DIARY_INDEX", "diary_index")
-    state_path = _state_default("DREAM_FORGET_STATE", "forget_sweep")
+    index_path = STATE.diary_index
+    state_path = STATE.forget_sweep
     # A reader, also for whoever cleans a backup of the diary without the state lock: it never moves a file.
     index = _read_state_file(index_path)[0]
     sweep_state = _read_state_file(state_path)[0]
@@ -7205,342 +5181,9 @@ def forgotten_diary_index(ids):
     return out
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-def memory_experience(attempt_id=None, store=None):
-    """Live, explicit profile-store report; no stored lessons or copies of corrections."""
-    if fact_source() != "holographic":
-        return {"status": "unsupported"}
-    _, scope = chat_store_dir()
-    if scope not in ("profile", "user", "chat", "thread"):
-        return {"status": "unsupported_scope"}
-    if store is not None:
-        key = _promote_key(store)
-        _, allowed = chat_stores_settings()
-        if key not in allowed:
-            return {"status": "unsupported_scope"}
-        db = list_chat_stores().get(key)
-        if not db or Path(db).is_symlink():
-            return {"status": "unavailable"}
-    else:
-        if scope != "profile":
-            return {"status": "unsupported_scope"}
-        db = fact_store_path()
-    if not db:
-        return {"status": "unavailable"}
-    spec = importlib.util.spec_from_file_location("_dream_experience", Path(__file__).with_name("dream_experience.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    report = mod.read_report(db, attempt_id)
-    if attempt_id is None and report.get("status") == "ok":
-        # The summary's groups are problems of this one store (3.7.0): say which — stores are never counted together.
-        report["store"] = key if store is not None else "profile"
-    return report
-
-
-def explain(fact_id, mem_md, corr_days):
-    """`--explain ID`: per-signal breakdown of one fact (OpenClaw promote-explain)."""
-    facts = [f for f in load_all_facts() if str(f["fact_id"]) == str(fact_id)]
-    if not facts:
-        print(f"fact {fact_id} not found", file=sys.stderr)
-        return 1
-    f = facts[0]
-    set_household(g.get("content") for g in load_all_facts() if not g.get("store"))
-    all_messages = load_messages(os.path.join(HOME, "state.db"), corr_days)
-    if all_messages is None:
-        print("[dream] messages unavailable (state.db busy or locked) — mentions are not counted below",
-              file=sys.stderr)
-    messages = messages_for(f, all_messages or [])
-    memory_text = load_durable_memory_text(mem_md)
-    score, sig, meta = signals_for_fact(f, messages)
-    print(f"fact {fact_id}: {f['content'][:200]}")
-    print(f"score {score} (gate {SETTINGS.MIN_SCORE}); weights {SETTINGS.WEIGHTS}")
-    for k, v in sig.items():
-        print(f"  {k:20s} {v:5.3f} * {SETTINGS.WEIGHTS[k]:.2f} = {v * SETTINGS.WEIGHTS[k]:.3f}")
-    print(f"  mentions {meta['mentions']} in {meta['ref_days']} day(s); retrievals {meta['rc']}; "
-          f"days_old {meta['days_old']}")
-    for e in meta.get("evidence") or []:
-        print(f"    {e['day']}: {e['text']}")
-    scored = {"meta": meta, "helpful_count": f.get("helpful_count"), "origin": f.get("origin")}
-    if f.get("origin") == "inferred":
-        print("origin inferred: an agent's conclusion nobody confirmed is not promoted; people repeating it "
-              "offer it to `confirm`")
-    else:
-        print(f"origin {f.get('origin') or 'not recorded'}: corroboration decides")
-    print(f"promotion_ready {promotion_ready(scored)}; in_memory {already_in_memory(f['content'], memory_text)}; "
-          f"unsafe {classify_unsafe(f['content'])}; ephemeral {is_ephemeral_fact(f['content'])}; "
-          f"expired {is_expired_event(f['content'])}")
-    near = nearest_entry(f["content"], sources=load_durable_memory_sources(mem_md))
-    if near:
-        print(f"nearest entry in {near.get('target', '?')} ({near['overlap']}): {near['entry']}")
-        if near.get("old_text"):
-            print(f"  replace anchor: {near['old_text']!r}")
-    for c in find_conflicts(f["content"], memory_text):
-        print(f"possible conflict: {c}")
-    return 0
-
-
-def dry_run_summary(result, source):
-    """Plain-text report of a `--dry-run` pass: what the dream would put in
-    front of the agent tonight. Facts carry their ids so a human can follow up
-    with `--explain`; contents are trimmed, secrets never shown."""
-    st = result["stats"]
-    lines = ["Dry run — nothing was written: state files were copied to a temporary",
-             "directory and discarded; no diary, no memory change.",
-             f"fact source: {source} · facts: {st['facts']} · human messages in window: "
-             f"{st['messages_window']}"]
-    usage = ", ".join(f"{name} {rec['percent']}% ({rec['chars']}/{rec['limit']})"
-                      if rec.get("percent") is not None else f"{name} {rec['chars']} chars"
-                      for name, rec in (result.get("memory_usage") or {}).items())
-    if usage:
-        lines.append(f"memory: {usage}")
-    if result.get("fact_store_note"):
-        lines.append(f"note: {result['fact_store_note']}")
-    if result.get("chat_stores"):
-        lines.append(chat_stores_line(result["chat_stores"]))
-
-    def facts(title, items, why=False):
-        lines.append(f"{title}: {len(items)}")
-        for item in items[:8]:
-            text = re.sub(r"\s+", " ", item.get("content") or "")[:110]
-            tail = f"  ({item.get('why')})" if why and item.get("why") else ""
-            lines.append(f"  - [{item.get('fact_id')}] {text}{tail}")
-        if len(items) > 8:
-            lines.append(f"  … and {len(items) - 8} more")
-
-    facts("promotions (candidates for durable memory)", result.get("promotions") or [], why=True)
-    facts("new facts to review", result.get("new_facts") or [])
-    facts("conflicts (same subject, different numbers or negation)", result.get("conflicts") or [])
-    facts("facts that look unused", result.get("fact_decays") or [])
-    lines.append(f"facts people said again on different days (to confirm): {len(result.get('confirm') or [])}")
-    pairs = result.get("duplicate_pairs") or []
-    skipped = st.get("duplicate_pairs_skipped")
-    lines.append(f'pairs of facts to ask "merge?" about: {len(pairs)}'
-                 + (f" (the search did not run: {skipped})" if skipped else ""))
-    for p in pairs[:8]:
-        keep, copy_ = p.get("keep") or {}, p.get("copy") or {}
-        one, two = (re.sub(r"\s+", " ", side.get("content") or "")[:110] for side in (keep, copy_))
-        lines.append(f"  - {p.get('proposal')}: [{keep.get('fact_id')}] {one}")
-        lines.append(f"      and [{copy_.get('fact_id')}] {two}")
-    md = result.get("md_decays") or []
-    lines.append('memory entries to ask "still relevant?": ' + str(len(md)))
-    for d in md[:8]:
-        lines.append("  - " + re.sub(r"\s+", " ", d.get("entry") or "")[:110])
-    lines.append(f"quarantined (secrets / injection, content hidden): {st.get('quarantined', 0)}")
-    if st.get("judge"):
-        lines.append(_judge_line(st["judge"]) + ("" if st["judge"].get("problem")
-                                                 else " (cached verdicts only: nothing was sent)"))
-    for a in result.get("alerts") or []:
-        lines.append(f"ALERT: {a.get('message') or a}")
-    # The keys the gate wakes on, from the same config (`precheck.actionable_keys`): a list of its own here said
-    # "would wake" while a gate with other keys stayed asleep (review of 2.9.8).
-    config = SETTINGS.CONFIG
-    precheck = config.get("precheck") if isinstance(config.get("precheck"), dict) else {}
-    keys = precheck.get("actionable_keys") or DEFAULT_CONFIG["precheck"]["actionable_keys"]
-    work = sum(st.get(k, 0) or 0 for k in keys if isinstance(k, str))
-    lines.append("verdict: the nightly job would wake the agent" if work
-                 else "verdict: nothing to do — the nightly job would stay asleep "
-                      "(unless a memory file is near its limit)")
-    return "\n".join(lines)
-
-
-def _state_default(env_name, cfg_key):
-    p = os.environ.get(env_name)
-    if p is not None:
-        return p
-    p = (SETTINGS.CONFIG.get("state") or {}).get(cfg_key)
-    if not p:
-        return ""
-    return p if os.path.isabs(os.path.expanduser(p)) else os.path.join(HOME, p)
-
-
-def main(argv=None):
-    ap =argparse.ArgumentParser(description="Read-only dreaming pass over agent memory")
-    ap.add_argument("--hermes-home", default=None,
-                    help="Hermes home (default: $HERMES_HOME or ~/.hermes); the cron gates pass "
-                         "the home they were installed into")
-    ap.add_argument("--config", default=None, help="JSON config (default: $DREAM_CONFIG or "
-                                                   "$HERMES_HOME/dreaming.json)")
-    ap.add_argument("--window", type=int, default=None, help="window for emerging themes / new facts")
-    ap.add_argument("--corr-window", type=int, default=None,
-                    help="window for corroboration from conversations")
-    ap.add_argument("--md-decay-days", type=int, default=None,
-                    help="'not surfaced for long' threshold for MEMORY.md entries")
-    ap.add_argument("--memory-md", default=None)
-    ap.add_argument("--out", default="-")
-    ap.add_argument("--diary", default="")
-    ap.add_argument("--asked-state", default=None,
-                    help="cooldown state of md_decay questions; empty string — off")
-    ap.add_argument("--rejected-state", default=None,
-                    help="reject list (dream-reject.py); empty string — off")
-    ap.add_argument("--seen-state", default=None,
-                    help="cooldown of new_facts/fact_decays/conflicts; empty string — off")
-    ap.add_argument("--snapshot-state", default=None,
-                    help="snapshot for the memory-loss guard; empty string — off")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="run the pass on throw-away copies of the state files and print a "
-                         "short plain-text report; writes nothing (no state, no diary)")
-    ap.add_argument("--explain", default=None, metavar="FACT_ID",
-                    help="print the score breakdown of one fact and exit")
-    experience_args = ap.add_mutually_exclusive_group()
-    experience_args.add_argument("--memory-outcomes", action="store_true",
-                                 help="read the live holographic task-outcome summary; no writes or model calls")
-    experience_args.add_argument("--memory-explain", metavar="ATTEMPT_ID",
-                                 help="explain a recorded memory attempt, without replaying search")
-    ap.add_argument("--memory-format", choices=("json", "text"), default="json")
-    ap.add_argument("--memory-store", metavar="STORE_KEY",
-                    help="one explicitly promoted store (chat_stores.promote_from); never joins stores")
-    ap.add_argument("--forget-sweep", action="store_true",
-                    help="only clean the copies of facts the store has forgotten (holographic >= 0.8.0) "
-                         "and print what was removed; every pass does this first")
-    ap.add_argument("--deadline", type=float, default=None, metavar="EPOCH",
-                    help="when the gate kills the pass (Unix time; dream-precheck.py passes it): the cloud judge "
-                         "stops early enough for the rest of the pass")
-    ap.add_argument("--judge-replay", default=None, metavar="FILE",
-                    help="the cloud judge takes its answers from FILE (JSON lines of recorded answers) instead of "
-                         "the network; none of the judge's files is written")
-    ap.add_argument("--judge-export", default=None, metavar="OUT",
-                    help="write a review sample of the judge's journal to OUT (one pair per fact: id, fact, "
-                         "words) and keep what the judge did with it in the manifest, then exit")
-    ap.add_argument("--judge-score", default=None, metavar="LABELS",
-                    help="join the labels of a review sample (JSON lines: id, label S / C / U / ?) with the "
-                         "manifest and print whether the judge is ready for veto, then exit")
-    args = ap.parse_args(argv)
-
-    load_for_home(args.hermes_home or HOME, args.config)
-    if args.memory_outcomes or args.memory_explain is not None:
-        report = memory_experience(args.memory_explain, args.memory_store)
-        if args.memory_format == "text":
-            spec = importlib.util.spec_from_file_location("_dream_experience", Path(__file__).with_name("dream_experience.py"))
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            print(mod.render(report))
-        else:
-            print(json.dumps(report, ensure_ascii=False))
-        return 0 if report["status"] == "ok" else 1
-    if args.judge_export:
-        return judge_export(args.judge_export)
-    if args.judge_score:
-        return judge_score(args.judge_score)
-    if args.judge_replay and not os.path.isfile(args.judge_replay):
-        print(f"[dream] error: --judge-replay {args.judge_replay} is not a file", file=sys.stderr)
-        return 2
-    if args.explain is not None:
-        return explain(args.explain, args.memory_md or os.path.join(HOME, "memories", "MEMORY.md"),
-                       args.corr_window or int((SETTINGS.CONFIG.get("windows") or {}).get("corroboration_days", 60)))
-    windows = SETTINGS.CONFIG.get("windows") or {}
-    window = args.window if args.window is not None else _env("DREAM_WINDOW_DAYS", int(windows.get("themes_days", 14)), int)
-    corr = args.corr_window if args.corr_window is not None else _env("DREAM_CORR_DAYS", int(windows.get("corroboration_days", 60)), int)
-    md_days = args.md_decay_days if args.md_decay_days is not None else _env("DREAM_MD_DECAY_DAYS", int(windows.get("md_decay_days", 60)), int)
-    mem_md = args.memory_md or os.path.join(HOME, "memories", "MEMORY.md")
-    asked = args.asked_state if args.asked_state is not None else _state_default("DREAM_ASKED_STATE", "asked")
-    rejected = args.rejected_state if args.rejected_state is not None else _state_default("DREAM_REJECTED_STATE", "rejected")
-    seen = args.seen_state if args.seen_state is not None else _state_default("DREAM_SEEN_STATE", "seen")
-    snapshot = args.snapshot_state if args.snapshot_state is not None else _state_default("DREAM_SNAPSHOT_STATE", "snapshot")
-    proposals = proposals_path()
-
-    if args.dry_run:
-        # The pass itself writes cooldowns and the loss-guard snapshot. A dry run
-        # gets copies of them — real input, nothing written back.
-        sandbox = tempfile.mkdtemp(prefix="dream-dry-")
-        try:
-            paths = []
-            for i, real in enumerate((asked, rejected, seen, snapshot, proposals)):
-                if not real:
-                    paths.append(None)
-                    continue
-                copy = os.path.join(sandbox, f"state{i}.json")
-                if os.path.exists(real):
-                    shutil.copyfile(real, copy)
-                paths.append(copy)
-            result = run(window, corr, md_days, mem_md, asked_state_path=paths[0],
-                         rejected_state_path=paths[1], seen_state_path=paths[2],
-                         snapshot_state_path=paths[3], proposals_state_path=paths[4],
-                         judge=JudgeRun(judge_files(), False, None, args.judge_replay))
-        finally:
-            shutil.rmtree(sandbox, ignore_errors=True)
-        print(dry_run_summary(result, fact_source()))
-        return 0
-
-    if not args.forget_sweep:
-        # The pass writes cooldowns, questions and the diary from this config: on the defaults a broken file turned
-        # into a night of wrong questions. Fail here; the gate turns the stderr line into `dream_error`.
-        problem = config_problem(args.config)
-        if problem:
-            print(f"[dream] error: {problem} — the pass did not run (fix the file, or check it with "
-                  f"install.py --check)", file=sys.stderr)
-            return 2
-
-    # Forgotten facts first: the pass must not re-read a cooldown or a reject record of a fact that is gone,
-    # and the diary index must hold every fact before today's lines are written.
-    def sweep(when):
-        try:
-            swept = forget_sweep()
-        except Exception as e:  # noqa: BLE001 — a sweep hiccup must not cost the night's pass
-            swept = {"errors": [f"{type(e).__name__}: {e}"]}
-        if not args.forget_sweep and (swept.get("errors") or any(
-                swept.get(k) for k in ("payload", "rejected", "seen", "proposals", "judge", "diary_lines",
-                                       "cron_logs", "corrupt_copies"))):
-            print(f"[dream] forget sweep ({when}): {json.dumps(swept, ensure_ascii=False)}", file=sys.stderr)
-        if not args.forget_sweep:
-            # Facts merged into others (holographic >= 0.19.0): live state only, never through the forget gate.
-            try:
-                merged = merge_sweep()
-            except Exception as e:  # noqa: BLE001 — as the forget sweep: the night's pass comes first
-                merged = {"errors": [f"{type(e).__name__}: {e}"]}
-            if merged.get("errors") or any(v for k, v in merged.items() if k != "merged"):
-                print(f"[dream] merge sweep ({when}): {json.dumps(merged, ensure_ascii=False)}", file=sys.stderr)
-        return swept
-
-    with _sweep_lock(HOME, wait=not args.forget_sweep) as held:
-        if not held:  # the pass holds the state and sweeps itself; the gate's next tick looks again
-            print(json.dumps({"skipped": "the nightly pass holds the state"}, ensure_ascii=False))
-            return 0
-        swept = sweep("before the pass")
-        if args.forget_sweep:
-            print(json.dumps(swept, ensure_ascii=False))
-            return 1 if swept.get("errors") else 0
-
-        result = run(window, corr, md_days, mem_md,
-                     asked_state_path=asked or None,
-                     rejected_state_path=rejected or None,
-                     seen_state_path=seen or None,
-                     snapshot_state_path=snapshot or None,
-                     proposals_state_path=proposals or None,
-                     judge=JudgeRun(judge_files(), not args.judge_replay, args.deadline, args.judge_replay))
-
-        scrub_result(result)  # a fact forgotten while the pass ran never reaches its output
-        text = json.dumps(result, ensure_ascii=False, indent=2)
-        if args.out in ("-", "", None):
-            print(text)
-        else:
-            _write_private(args.out, text)
-        if args.diary:
-            try:
-                append_diary(args.diary, result["diary"])
-            except OSError as e:
-                # The JSON is already out; a diary hiccup must not turn into dream_error.
-                print(f"[dream] warn: diary not written: {e}", file=sys.stderr)
-        # A fact forgotten in the instant between the check above and the writes: the next sweep (this one,
-        # or the gate's) finds it.
-        sweep("after the pass")
-
-    st = result["stats"]
-    print(f"[dream] facts:{st['facts']} messages:{st['messages_window']} promote:{st['promotions']} "
-          f"ephemeral:{st.get('ephemeral_events', 0)} fact-decay:{st['fact_decays']} "
-          f"md-decay:{st['md_decays']} conflicts:{st.get('conflicts', 0)} themes:{st['themes']} "
-          f"quarantine:{st.get('quarantined', 0)} "
-          f"rejected-earlier:{st.get('rejected_suppressed', 0)} "
-          f"shown-earlier:{st.get('new_facts_suppressed', 0)}+{st.get('fact_decays_suppressed', 0)}"
-          f"+{st.get('conflicts_suppressed', 0)}",
-          file=sys.stderr)
-
-
-# The effective settings at import are the defaults: importing reads no file of any home. `main()` and every
-# loader apply the config of the home they run for with `load_for_home()`.
-configure(_deep_merge(DEFAULT_CONFIG, {}))  # a copy, as load_config() gives: CONFIG is not DEFAULT_CONFIG
+# The effective settings at import are the defaults: importing reads no file. The caller applies its own with
+# configure() before a night.
+configure({})
 
 
 def __getattr__(name):
@@ -7568,5 +5211,82 @@ class _DreamModule(types.ModuleType):
 if vars(sys.modules.get(__name__, sys)) is globals():
     sys.modules[__name__].__class__ = _DreamModule
 
-if __name__ == "__main__":
-    raise SystemExit(main() or 0)
+
+# ---------------------------------------------------------------------------
+# A person's answers that the engine keeps: the reject list and the "merge?" proposals
+# ---------------------------------------------------------------------------
+
+def reject_fact(state, fact_id, content, reason=""):
+    """Put a fact on the reject list of *state*: the night stops offering it (matched by text, so a fact stored again
+    under a new id stays rejected). A text holding a secret is not kept — its fingerprint is. Returns the key."""
+    rejected = _load_state_file(state.rejected)
+    key = _fact_fingerprint(content)
+    record = {"fact_id": fact_id, "content": content, "fingerprint": key, "reason": reason,
+              "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    if classify_unsafe(content) == "secret":
+        record.update(content=None, redacted="secret")
+    rejected[key] = record
+    _write_private(state.rejected, json.dumps(rejected, ensure_ascii=False, indent=1) + "\n")
+    return key
+
+
+def unreject_fact(state, fact_id):
+    """Lift the rejections of *fact_id*; returns how many records went."""
+    rejected = _load_state_file(state.rejected)
+    gone = [k for k, rec in rejected.items() if isinstance(rec, dict) and str(rec.get("fact_id")) == str(fact_id)]
+    for key in gone:
+        rejected.pop(key)
+    if gone:
+        _write_private(state.rejected, json.dumps(rejected, ensure_ascii=False, indent=1) + "\n")
+    return len(gone)
+
+
+def close_proposal(state, number, how):
+    """The person's answer to a "merge?" proposal, or what became of it: *how* is `not-duplicates` (never asked
+    again), `stale` (the merge was refused because a text changed — the pair may be asked anew at once) or `undo`
+    (open again). Raises ValueError for a number unknown or in the wrong status."""
+    number = str(number).strip().upper()
+    if number.isdigit():
+        number = f"D-{number}"
+    if not PROPOSAL_RE.fullmatch(number):
+        raise ValueError(f"not a proposal number: {number!r} (expected D-17)")
+    data = load_proposals(state.proposals)
+    seen = _load_state_file(state.seen)
+    dup_not = seen.get("dup_not") if isinstance(seen.get("dup_not"), dict) else {}
+    seen["dup_not"] = dup_not
+    rec = data["proposals"].get(number)
+    now = datetime.now(timezone.utc)
+    if rec is None and how == "undo":
+        keys = [k for k, v in dup_not.items() if isinstance(v, dict) and v.get("proposal") == number]
+        if not keys:
+            raise ValueError(f"no merge proposal {number}")
+        for k in keys:
+            dup_not.pop(k)
+        _write_private(state.seen, json.dumps(seen, ensure_ascii=False, indent=1))
+        return
+    if rec is None:
+        raise ValueError(f"no merge proposal {number} (a closed one is kept {DUP_CLOSED_KEEP_DAYS} days)")
+    status = rec.get("status")
+    if how == "not-duplicates":
+        if status == "done":
+            raise ValueError(f"{number} was merged already")
+        _close_proposal(rec, "declined", now, "the person: these are different")
+        dup_not[rec["pair_key"]] = {"at": now.isoformat(timespec="seconds"), "proposal": number,
+                                    "fact_ids": [(rec.get(s) or {}).get("fact_id") for s in ("keep", "copy")]}
+    elif how == "stale":
+        if status != "open":
+            return
+        _close_proposal(rec, "stale", now, "the merge was refused: the texts changed")
+        release_pair(seen, rec.get("pair_key"), number)
+    elif how == "undo":
+        if status not in ("declined", "stale"):
+            raise ValueError(f"{number} is {status} — nothing to undo")
+        for key in ("closed_at", "closed_why"):
+            rec.pop(key, None)
+        rec["status"] = "open"
+        rec["created"] = now.isoformat(timespec="seconds")
+        dup_not.pop(rec["pair_key"], None)
+    else:
+        raise ValueError(f"unknown answer {how!r}")
+    save_proposals(state.proposals, data)
+    _write_private(state.seen, json.dumps(seen, ensure_ascii=False, indent=1))

@@ -1,8 +1,8 @@
 """The CLIs' own memory, read-only: Claude Code auto-memory notes, Codex memories, CLAUDE.md / AGENTS.md.
 
 - Auto-memory notes (``projects/<project>/memory/*.md`` with frontmatter, ``MEMORY.md`` the index) are the "still
-  relevant?" material: each topic file becomes one §-entry of the shadow ``MEMORY.md``, with a stable id
-  (sha1 of its path) to map the engine's answer back to the file. Claude rewrites these files itself; the pass never does.
+  relevant?" material: each topic file becomes one note the engine reads, with a stable id (sha1 of its path) to
+  map its answer back to the file. Claude rewrites these files itself; the pass never does.
 - Codex memories (``memories*/``) and the instruction files are dedupe targets only: "this fact is already written
   there" — never questions, never edited.
 - The index ``MEMORY.md`` of each project is measured as Claude Code loads it: the first 200 lines / 25 KB.

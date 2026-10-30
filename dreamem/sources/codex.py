@@ -146,7 +146,7 @@ def read(dirs: list[Path], since: float, now: float | None = None) -> tuple[list
             continue
         cov.read += 1
         meta, kind, cwd, bad = None, UNKNOWN, "", 0
-        for obj, is_last in records(data, _wanted):
+        for obj, is_last in records(io.BytesIO(data), _wanted):
             if obj is None:
                 if is_last:
                     cov.note("cut_last_line")

@@ -70,6 +70,14 @@ def _version(value) -> tuple | None:
         return None
 
 
+def _lines(handle, cov):
+    """The lines of an open transcript; a read that fails half way makes the coverage partial."""
+    try:
+        yield from handle
+    except OSError:
+        cov.partial("unreadable")
+
+
 def _maybe_user(raw: bytes) -> bool:
     # A tool result is the harness's line, and the bulk of a transcript: never parsed.
     return b'"user"' in raw and b'"tool_use_id"' not in raw
@@ -108,7 +116,7 @@ def read(projects: Path, since: float, now: float | None = None) -> tuple[list[M
             continue
         cov.files += 1
         try:
-            data = path.read_bytes()
+            handle = path.open("rb")
         except FileNotFoundError:
             cov.partial("vanished")
             continue
@@ -117,35 +125,36 @@ def read(projects: Path, since: float, now: float | None = None) -> tuple[list[M
             continue
         cov.read += 1
         bad = 0
-        for obj, is_last in records(data, _maybe_user):
-            if obj is None:
-                if is_last:
-                    cov.note("cut_last_line")
-                else:
-                    bad += 1
-                continue
-            if obj.get("type") != "user":
-                continue
-            message = obj.get("message")
-            if not isinstance(message, dict) or message.get("role") != "user":
-                continue
-            raw = _text(message)
-            if raw is None or not raw.strip():
-                continue
-            text = clean_text(raw)
-            if not text:
-                cov.count(MACHINE)  # a notice, a command, a reminder: nothing of a person left
-                continue
-            kind = classify(obj)
-            version = _version(obj.get("version"))
-            if "turnOrigin" in obj and version:
-                tagged.add(version)
-            if kind == UNKNOWN and "turnOrigin" not in obj and obj.get("promptSource") in (None, "sdk") and version:
-                legacy.append((version, obj, text, path))  # decided once every file is read
-                continue
-            cov.count(kind)
-            if kind == HUMAN:
-                take(obj, text, path)
+        with handle:
+            for obj, is_last in records(_lines(handle, cov), _maybe_user):
+                if obj is None:
+                    if is_last:
+                        cov.note("cut_last_line")
+                    else:
+                        bad += 1
+                    continue
+                if obj.get("type") != "user":
+                    continue
+                message = obj.get("message")
+                if not isinstance(message, dict) or message.get("role") != "user":
+                    continue
+                raw = _text(message)
+                if raw is None or not raw.strip():
+                    continue
+                text = clean_text(raw)
+                if not text:
+                    cov.count(MACHINE)  # a notice, a command, a reminder: nothing of a person left
+                    continue
+                kind = classify(obj)
+                version = _version(obj.get("version"))
+                if "turnOrigin" in obj and version:
+                    tagged.add(version)
+                if kind == UNKNOWN and "turnOrigin" not in obj and obj.get("promptSource") in (None, "sdk") and version:
+                    legacy.append((version, obj, text, path))  # decided once every file is read
+                    continue
+                cov.count(kind)
+                if kind == HUMAN:
+                    take(obj, text, path)
         if bad:
             cov.partial("bad_lines")
             cov.note("bad_line", bad - 1)

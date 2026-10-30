@@ -24,8 +24,14 @@ def _q(text, n=400):
     return f"«{text[:n]}{'…' if len(text) > n else ''}»"
 
 
+def forgotten(q: dict) -> bool:
+    return q.get("failure") == "forgotten"
+
+
 def question_text(q: dict) -> str:
     s = q["section"]
+    if forgotten(q):
+        return f"{q['qid']} [removed: a forgotten fact]"
     if s == "duplicate":
         keep, copy = q["keep"], q["copy"]
         line = f"{q['qid']} [{q['proposal']}] {_q(keep['content'], 2000)} and {_q(copy['content'], 2000)} — {SECTION_TITLE[s]}"
@@ -65,7 +71,7 @@ def coverage_line(coverage: dict) -> str:
 
 def render(doc: dict) -> str:
     qs = doc["questions"]
-    open_qs = [q for q in qs if q["status"] in OPEN and q["status"] != DEFERRED]
+    open_qs = [q for q in qs if q["status"] in OPEN and q["status"] != DEFERRED and not forgotten(q)]
     lines = [f"# Dreaming — {local_time(doc['generated_at'])} · profile {doc['profile']}", "",
              f"Read: {coverage_line(doc['coverage'])}.",
              f"Facts in the store: {doc['stats'].get('facts', 0)}; messages that may corroborate: "

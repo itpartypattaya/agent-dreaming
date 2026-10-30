@@ -17,12 +17,12 @@ Of the transcripts it keeps only what you typed yourself, within the window (30 
 Everything goes to `~/.dreaming` (or `DREAMEM_HOME`), readable by your user only:
 
 - the questions of the last night and their answers (`questions.json`, `report.md`), the engine's output (`dream.json`);
-- cooldowns, the list of rejected facts, the duplicate proposals and a short diary of nights (`profiles/*/home/cache`,
-  `DREAMS.md`);
-- copies of the memory notes being reviewed (`profiles/*/home/memories`).
+- cooldowns, the list of rejected facts, the duplicate proposals, a snapshot of note sizes and a short diary of
+  nights (`profiles/*/state`).
 
-Your messages are written to a temporary database for the length of one pass and deleted when it ends. A message that
-holds a secret (a key, token, password) or an instruction aimed at an agent is never written at all.
+Your messages are read into memory for the length of one pass and written nowhere — not as a copy, not as an
+evidence snippet. Memory notes are not copied either: a question quotes the note it is about. A message or note that
+holds a secret (a key, token, password) or an instruction aimed at an agent is left out of the pass entirely.
 
 When a fact is forgotten in holographic-memory, `dreamem forget-sweep` (and every pass) removes it from these files.
 

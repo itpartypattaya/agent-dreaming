@@ -80,7 +80,7 @@ def test_reject_puts_the_fact_on_the_core_reject_list(world):
     assert review.decide(world.homes, q["qid"], "reject", out=lines.append) == 0
     # "never ask again" also stops recall offering it: the answer hands the agent that one call
     assert json.loads(lines[0])["call"] == {"tool": "memory_feedback", "args": {"fact_id": fid, "action": "unhelpful"}}
-    rejected = json.loads((world.homes.profile("global") / "home" / "cache" / "dream-rejected.json")
+    rejected = json.loads((world.homes.profile("global") / "state" / "rejected.json")
                           .read_text(encoding="utf-8"))
     assert any(str(fid) in json.dumps(v) for v in rejected.values())
     # The call was not made yet: the engine asks only for it, never for the fact itself again.
@@ -110,3 +110,16 @@ def test_list_and_status(world, capsys):
     out = io.StringIO()
     run.status(world.homes, out=out)
     assert "profile global" in out.getvalue() and "open 1" in out.getvalue()
+
+
+def test_one_question_about_a_fact_a_night(world):
+    """A fact people keep saying is offered by the engine twice (promotion and confirm): the person is asked once."""
+    fid = world.fact("Кассир Марина работает по субботам и воскресеньям", origin="said", days_old=50, rc=4, helpful=1)
+    world.say({6: ["Кассир Марина сегодня опять работает в субботу"],
+               4: ["Марина работает по субботам и воскресеньям, ставь её в график"],
+               2: ["Марина в воскресенье тоже работает, кассир на месте"]})
+    doc = night(world)
+    about = [q for q in doc["questions"] if q.get("fact_id") == fid]
+    assert len(about) >= 2  # the engine did offer it twice
+    assert [q["status"] for q in about].count(questions.GENERATED) == 1
+    assert doc["skipped"]["same_fact"] == len(about) - 1

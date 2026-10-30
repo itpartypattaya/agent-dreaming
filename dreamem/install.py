@@ -32,6 +32,7 @@ MARK_END = "# <<< agent-dreaming <<<"
 MARKETPLACE = "itpartypattaya/agent-dreaming"
 PLUGIN = "agent-dreaming@agent-dreaming"
 TASK = "agent-dreaming"
+SKILL_MARK = "dreamem decide"  # in our skill's text, in no other skill's: what install may replace or remove
 
 
 def python_path() -> str:
@@ -122,12 +123,20 @@ def install_codex(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdout) 
         return 1
     written = _write(path, old, new, dry_run, out)
     skill = Path.home() / ".agents" / "skills" / "dreaming" / "SKILL.md"
-    if remove:
+    old_skill = skill.read_text(encoding="utf-8", errors="replace") if skill.exists() else ""
+    if old_skill and SKILL_MARK not in old_skill:
+        # Another skill of that name (hermes-dreaming has one): never overwritten, never removed.
+        print(f"{skill}: a skill named 'dreaming' that is not ours is there — left as it is; "
+              f"{'nothing removed' if remove else 'install this one by hand under another name'}", file=out)
+    elif remove:
         if skill.exists() and not dry_run:
-            shutil.rmtree(skill.parent)
-        print(f"{'would remove' if dry_run else 'removed'}: {skill.parent}", file=out)
+            skill.unlink()
+            for backup in skill.parent.glob("SKILL.md.bak-*"):
+                backup.unlink()
+            if not any(skill.parent.iterdir()):
+                skill.parent.rmdir()
+        print(f"{'would remove' if dry_run else 'removed'}: {skill}", file=out)
     else:
-        old_skill = skill.read_text(encoding="utf-8") if skill.exists() else ""
         _write(skill, old_skill, skill_text("dreaming"), dry_run, out)
     if written and not remove:
         print("Codex runs a hook only once it is trusted: open /hooks in Codex and trust the two dreaming hooks.",

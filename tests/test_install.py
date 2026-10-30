@@ -72,4 +72,26 @@ def test_engine_is_self_contained():
         assert "hermes-dreaming/" not in text.replace("hermes-dreaming/issues", "")
     from dreamem import engineapi
 
-    assert not (engineapi.ENGINE_DIR / "dream_judge.py").exists()  # the network judge is not part of this plugin
+    for gone in ("dream_judge.py", "dream_yaml.py", "dream-reject.py"):  # the network judge, the Hermes readers
+        assert not (engineapi.ENGINE_DIR / gone).exists()
+    source = (engineapi.ENGINE_DIR / "dream.py").read_text(encoding="utf-8")
+    for word in ("HERMES_HOME", "os.environ", "config.yaml", "state.db\"", "subprocess"):
+        assert word not in source, word
+
+
+def test_another_skill_named_dreaming_is_never_overwritten_or_removed(tmp_path, monkeypatch):
+    """Security review: hermes-dreaming ships a skill named `dreaming` too; install and uninstall must leave a skill
+    that is not ours as it is."""
+    from dreamem.paths import homes
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    h = homes({"CODEX_HOME": str(tmp_path / ".codex"), "DREAMEM_HOME": str(tmp_path / ".dreaming")})
+    theirs = tmp_path / ".agents" / "skills" / "dreaming" / "SKILL.md"
+    theirs.parent.mkdir(parents=True)
+    theirs.write_text("---\nname: dreaming\n---\nsomeone else's skill\n", encoding="utf-8")
+    out = io.StringIO()
+    install.install_codex(h, remove=False, dry_run=False, out=out)
+    assert theirs.read_text(encoding="utf-8").endswith("someone else's skill\n")
+    assert "not ours" in out.getvalue()
+    install.install_codex(h, remove=True, dry_run=False, out=io.StringIO())
+    assert theirs.exists()

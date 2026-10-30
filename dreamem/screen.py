@@ -1,5 +1,5 @@
 """The filter before anything is written: every message and note goes through the engine's screen (its own rules and
-the holographic provider's ``holo_screen``) before it reaches the shadow home.
+the holographic provider's ``holo_screen``) before the engine sees it.
 
 A message with a secret is not stored at all — not raw, not cut. One with an instruction to an agent is not stored
 either; only the counts are. A note (auto-memory) with either is left out of the questions. In a dedupe target

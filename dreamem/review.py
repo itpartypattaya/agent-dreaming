@@ -131,19 +131,18 @@ def decide(homes: Homes, qid: str, answer: str, *, text: str | None = None, prof
         except ValueError as exc:
             out(f"error: {exc}")
             return 2
-        home = homes.profile(name) / "home"
-        if todo.get("local") == questions.REJECT:
-            r = engineapi.reject(home, str(q["fact_id"]), "--reason", f"rejected in review ({q['qid']})")
-            if r.returncode != 0:
-                questions.undo(q)
-                out(f"error: the reject list was not written: {(r.stderr or r.stdout).strip()[-300:]}")
-                return 1
-        elif todo.get("local") == questions.NOT_DUPLICATES:
-            r = engineapi.reject(home, "--not-duplicates", q["proposal"])
-            if r.returncode != 0:
-                questions.undo(q)
-                out(f"error: {(r.stderr or r.stdout).strip()[-300:]}")
-                return 1
+        state_dir = homes.profile(name) / "state"
+        try:
+            if todo.get("local") == questions.REJECT:
+                # The fact's whole current text: a question may show it cut, and the reject list matches by text.
+                current = store.fact_text(doc.get("store"), q["fact_id"]) or q.get("content") or ""
+                engineapi.reject(state_dir, q["fact_id"], current, f"rejected in review ({q['qid']})")
+            elif todo.get("local") == questions.NOT_DUPLICATES:
+                engineapi.close_proposal(state_dir, q["proposal"], "not-duplicates")
+        except (OSError, ValueError) as exc:
+            questions.undo(q)
+            out(f"error: the answer was not recorded: {exc}")
+            return 1
         _save(homes, name, doc)
         if todo.get("call"):
             out(json.dumps({"question": q["qid"], "profile": name, **todo}, ensure_ascii=False))
@@ -164,7 +163,7 @@ def mark(homes: Homes, qid: str, what: str, *, detail: str | None = None, profil
             elif what == "failed":
                 questions.failed(q, detail or "failed")
                 if q.get("section") == "duplicate" and q.get("proposal"):
-                    engineapi.reject(homes.profile(name) / "home", "--stale", q["proposal"])
+                    engineapi.close_proposal(homes.profile(name) / "state", q["proposal"], "stale")
             elif what == "undo":
                 questions.undo(q)
         except ValueError as exc:

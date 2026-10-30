@@ -2,13 +2,14 @@
 
 Order, each step only after the one before it succeeded: lock → remove what a killed pass left (``*.partial``) →
 due check (``--if-due``: already done today → exit at once) → read the sessions and notes → screen them → per
-profile: reopen the questions nobody answered, build the shadow home, run the engine, delete the shadow ``state.db``,
-publish (``dream.json``, ``questions.json``, ``report.md`` — each replaced in one step) → ``summary.json`` with
-``last_success`` last. A pass killed anywhere leaves the previous night's files whole and ``last_success`` unmoved.
+profile: reopen the questions nobody answered, run the engine in this process on the screened messages and notes
+(nothing of them is written anywhere), publish (``dream.json``, ``questions.json``, ``report.md`` — each replaced in
+one step) → ``summary.json`` with ``last_success`` last. A pass killed anywhere leaves the previous night's files whole
+and ``last_success`` unmoved; the engine's state then still names the unpublished night, which no answer
+acknowledges, so its cooldowns are dropped the next night.
 """
 from __future__ import annotations
 
-import json
 import shutil
 import sys
 import time
@@ -16,9 +17,9 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from . import config, notes, questions, report, screen, shadow, store
+from . import config, notes, questions, report, screen, store
+from .engineapi import engine_config, run_night
 from .engineapi import forget_sweep as engine_forget_sweep
-from .engineapi import run_pass
 from .fsutil import read_json, remove_partials, write_json, write_private
 from .lock import Lock
 from .paths import Homes
@@ -97,40 +98,58 @@ def gather(homes: Homes, settings: dict, now: float) -> dict:
 
 def _prepare_dry(pdir: Path, real: Path) -> None:
     """A dry run works on a copy of the profile's state, in a folder deleted afterwards."""
-    for name in ("questions.json",):
-        if (real / name).exists():
-            shutil.copy2(real / name, pdir / name)
-    if (real / "home" / "cache").is_dir():
-        shutil.copytree(real / "home" / "cache", pdir / "home" / "cache", dirs_exist_ok=True)
-    if (real / "home" / "memories" / "DREAMS.md").exists():
-        (pdir / "home" / "memories").mkdir(parents=True, exist_ok=True)
-        shutil.copy2(real / "home" / "memories" / "DREAMS.md", pdir / "home" / "memories" / "DREAMS.md")
+    if (real / "questions.json").exists():
+        shutil.copy2(real / "questions.json", pdir / "questions.json")
+    if (real / "state").is_dir():
+        shutil.copytree(real / "state", pdir / "state", dirs_exist_ok=True)
+
+
+def _message(m) -> dict:
+    return {"content": m.text, "ts": m.ts, "session_id": f"{m.client}:{m.session_id}", "source": m.client,
+            "key": m.key}
+
+
+def _without_words(result: dict) -> dict:
+    """The night's output as it is kept: the person's words (evidence snippets, theme samples) left out — they were
+    read for the night and are not stored."""
+    def strip(node):
+        if isinstance(node, dict):
+            return {k: strip(v) for k, v in node.items() if k not in ("evidence", "sample")}
+        if isinstance(node, list):
+            return [strip(v) for v in node]
+        return node
+    return strip(result)
 
 
 def pass_profile(pdir: Path, profile: config.Profile, settings: dict, tz: str, data: dict) -> dict:
     """One profile's night; returns its summary entry (``error`` set when the engine failed)."""
-    home = pdir / "home"
-    (home / "cache").mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(pdir / "home", ignore_errors=True)  # the shadow home of 0.1.0 held copies of notes: gone
+    state_dir = pdir / "state"
     previous = read_json(pdir / "questions.json")
-    reopened = questions.reopen_undecided(home, previous)
-    ack = questions.ack_for(home, previous)
+    reopened = questions.reopen_undecided(state_dir, previous)
+    acks = questions.acks_for(state_dir, previous)
     project_of = data["projects"]
     msgs = data["messages"]
     if profile.project_key:
         msgs = [m for m in msgs if project_of(m) == profile.project_key]
-    index = shadow.build(pdir, profile, settings, tz, msgs, project_of, data["auto"], data["codex_notes"],
-                         data["instructions"], ack)
-    out = home / "dream.json.partial"
+    auto = data["auto"] if profile.notes else []
+    cfg = engine_config(store=profile.store, settings=settings, tz=tz, min_trust=profile.min_trust)
     try:
-        proc = run_pass(home, out)
-    finally:
-        shadow.drop_state_db(home)  # the person's words do not stay between nights
-    write_private(pdir / "engine.log", proc.stderr[-20000:])
-    if proc.returncode != 0 or not out.exists():
-        tail = (proc.stderr or "").strip().splitlines()[-1:] or ["no output"]
-        return {"error": f"engine exited {proc.returncode}: {tail[0][:300]}"}
-    result = json.loads(out.read_text(encoding="utf-8"))
-    out.unlink()
+        result, entries = run_night(state_dir=state_dir, config=cfg, notes=[n.text for n in auto],
+                                    dedupe=[n.text for n in data["codex_notes"] + data["instructions"]],
+                                    messages=[_message(m) for m in msgs], acks=acks,
+                                    windows=settings.get("windows") or {})
+    except Exception as exc:  # noqa: BLE001 - one profile's failure is reported; the others still run
+        return {"error": f"engine failed: {type(exc).__name__}: {str(exc)[:300]}"}
+    by_text = {}
+    for n in auto:
+        by_text.setdefault(n.text.strip(), n)
+    index = {}
+    for i, entry in enumerate(entries):
+        note = by_text.get(entry.strip())
+        if note is not None:
+            index[i] = {"id": note.id, "project": note.project, "path": note.path, "name": note.name,
+                        "entry_key": questions.entry_key(entry)}
     coverage_ok = all(c["status"] == COMPLETE for c in data["coverage"].values()) and data["notes_ok"]
     ids = {i.get("fact_id") for k in ("promotions", "new_facts", "confirm", "trust_feedback", "fact_decays", "conflicts")
            for i in result.get(k) or []}
@@ -145,15 +164,16 @@ def pass_profile(pdir: Path, profile: config.Profile, settings: dict, tz: str, d
            "stats": result.get("stats") or {}, "questions": qs, "skipped": skipped, "alerts": alerts,
            "index_pressure": data["pressure"] if profile.notes else [],
            "screened": {**data["screened"], **{f"note_{k}": v for k, v in data["notes_screened"].items()}},
-           "reopened": reopened, "acknowledged": bool(ack)}
-    write_json(pdir / "dream.json", result)
+           "reopened": reopened, "acknowledged": bool(acks)}
+    write_json(pdir / "dream.json", _without_words(result))
     write_json(pdir / "questions.json", doc)
     write_private(pdir / "report.md", report.render(doc))
     sections: dict[str, int] = {}
     for q in qs:
         if q["status"] in questions.OPEN and q["status"] != questions.DEFERRED:
             sections[q["section"]] = sections.get(q["section"], 0) + 1
-    return {"generated_at": doc["generated_at"], "open": sum(sections.values()), "sections": sections,
+    return {"generated_at": doc["generated_at"], "published": time.time(), "open": sum(sections.values()),
+            "sections": sections,
             "coverage": {k: v["status"] for k, v in data["coverage"].items()}}
 
 
@@ -214,6 +234,15 @@ def run(homes: Homes, *, if_due: bool = False, dry_run: bool = False, only: list
         lock.release()
 
 
+def _fact_ids(node) -> set[int]:
+    if isinstance(node, dict):
+        own = {node["fact_id"]} if isinstance(node.get("fact_id"), int) else set()
+        return own.union(*(_fact_ids(v) for v in node.values()))
+    if isinstance(node, list):
+        return set().union(*(_fact_ids(v) for v in node)) if node else set()
+    return set()
+
+
 def forget_sweep(homes: Homes, out=sys.stdout) -> int:
     """Remove facts forgotten since the night from our copies: the questions (and the report rendered from them), the
     night's JSON, and — through the engine's own sweep — its cooldowns, reject list, proposals and diary."""
@@ -236,9 +265,12 @@ def forget_sweep(homes: Homes, out=sys.stdout) -> int:
             if scrubbed:
                 write_json(pdir / "questions.json", doc)
                 write_private(pdir / "report.md", report.render(doc))
+            if gone & _fact_ids(read_json(pdir / "dream.json", {})):
+                # The night's output holds facts that never became a question too: removed whole, it is a record.
                 (pdir / "dream.json").unlink(missing_ok=True)
-            if doc.get("store") and (pdir / "home" / "dreaming.json").exists():
-                problems += engine_forget_sweep(pdir / "home").returncode != 0
+            if doc.get("store"):
+                cfg = engine_config(store=Path(doc["store"]), settings={}, tz="UTC", min_trust=None)
+                problems += bool(engine_forget_sweep(state_dir=pdir / "state", config=cfg).get("errors"))
             print(f"{pdir.name}: {scrubbed} question(s) scrubbed", file=out)
         return 1 if problems else 0
 
