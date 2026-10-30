@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 — 2026-10-31
+
+- A session-start hook whose reader went away (the stdout pipe closed) ends quietly with exit 0 instead of a
+  traceback and exit 120; the night's line it could not deliver is shown in the next session.
+
 ## 0.3.0 — 2026-10-31
 
 - The time of the pass is the person's: `dream_time = "HH:MM"` (or `dreamem config time 23:00`) — the first session
