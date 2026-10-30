@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.3 — 2026-10-31
+
+- `dreamem install codex` asks for the time only with a person at a console: on Windows the NUL device
+  (`< /dev/null`) says `isatty()` and the question was printed with nobody to answer it.
+- The reminder to trust the hooks in `/hooks` comes only when our hooks are new or rewritten, not when another
+  change to the file (a Codex setting moved out of our block) left them as they were.
+
 ## 0.3.2 — 2026-10-31
 
 - `dreamem install codex` keeps what Codex itself appended inside our block: Codex adds a new table at the end of
