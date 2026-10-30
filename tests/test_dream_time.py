@@ -136,7 +136,9 @@ def test_install_schedule_reads_the_chosen_time(world):
     config.set_time(world.homes, "23:15")
     out = io.StringIO()
     assert install.install_schedule(world.homes, remove=False, dry_run=True, out=out) == 0
-    assert "23:15" in out.getvalue() and "04:00" not in out.getvalue()
+    # The job's own format per platform (a plist has hour and minute apart): compare with the spec, not "23:15".
+    assert install.schedule_spec(at="23:15")[1] in out.getvalue()
+    assert install.schedule_spec(at="04:00")[1] not in out.getvalue()
 
 
 # 5. installing into Codex in a terminal asks for the time when none is chosen
@@ -163,3 +165,36 @@ def test_install_codex_takes_the_time_without_asking(world, tmp_path, monkeypatc
         assert cli.main(["install", "codex", "--time", "21:15"]) == 0
         assert cli.main(["install", "codex", "--time", "late"]) == 2
     assert config.load(world.homes)[0]["dream_time"] == "21:15"
+
+
+# Codex review of PR #2: a preview keeps nothing, the time given to it included
+@pytest.mark.parametrize("target", ["schedule", "codex", "claude-code"])
+def test_a_dry_run_with_a_time_keeps_nothing(world, tmp_path, monkeypatch, capfd, target):
+    from pathlib import Path
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with environ(world):
+        assert cli.main(["install", target, "--dry-run", "--time", "23:15"]) == 0
+    assert not world.homes.config.exists()
+    if target == "schedule":
+        assert install.schedule_spec(at="23:15")[1] in capfd.readouterr().out  # the preview shows that time
+
+
+# Codex review of PR #2: a pass holding the lock at session start does not lift the once-a-day and three-day limits
+def test_a_running_pass_does_not_lift_the_asking_limits(world, monkeypatch):
+    from dreamem.lock import Lock
+
+    current = ["2026-10-30"]
+    monkeypatch.setattr(run, "today", lambda: current[0])
+    held = Lock(world.homes.lock)
+    assert held.acquire()
+    try:
+        assert asks_time(hook(world))
+        assert not asks_time(hook(world))  # the same day
+        for day in ("2026-10-31", "2026-11-01"):
+            current[0] = day
+            assert asks_time(hook(world))
+        current[0] = "2026-11-02"
+        assert not asks_time(hook(world))
+    finally:
+        held.release()

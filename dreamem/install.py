@@ -240,8 +240,9 @@ WantedBy=timers.target
 """)
 
 
-def install_schedule(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdout) -> int:
-    chosen = config.load(homes)[0].get("dream_time")
+def install_schedule(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdout, at: str | None = None) -> int:
+    """*at*: a time given on the command line (a ``--dry-run`` previews it without keeping it); else the setting."""
+    chosen = at or config.load(homes)[0].get("dream_time")
     name, content = schedule_spec(at=chosen if config.dream_time(chosen) else "04:00")
     if sys.platform != "win32":
         print(f"{name}:\n{content}", file=out)

@@ -112,13 +112,23 @@ def main(argv=None) -> int:
     if args.cmd == "hook":
         return hooks.session_start(h, args.client, background=args.background)
     if args.cmd == "install":
-        if args.time and not args.uninstall and set_time(h, args.time):
-            return 2
+        at = None
+        if args.time and not args.uninstall:
+            try:
+                at = config.normal_time(args.time)
+            except ValueError as exc:
+                print(exc, file=sys.stderr)
+                return 2
+            if args.dry_run:
+                print(f"would set dream time: {at}")  # a preview keeps nothing, the time included
+            elif set_time(h, at):
+                return 2
         if args.target == "codex":
-            return install.install_codex(h, remove=args.uninstall, dry_run=args.dry_run)
+            return install.install_codex(h, remove=args.uninstall, dry_run=args.dry_run, out=sys.stdout)
         if args.target == "claude-code":
-            return install.install_claude(remove=args.uninstall, dry_run=args.dry_run, run_it=args.run_it)
-        return install.install_schedule(h, remove=args.uninstall, dry_run=args.dry_run)
+            return install.install_claude(remove=args.uninstall, dry_run=args.dry_run, run_it=args.run_it,
+                                          out=sys.stdout)
+        return install.install_schedule(h, remove=args.uninstall, dry_run=args.dry_run, at=at, out=sys.stdout)
     return 2
 
 

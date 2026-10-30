@@ -77,15 +77,20 @@ def dream_time(value) -> tuple[int, int] | None:
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
-def set_time(homes: Homes, value: str) -> str:
-    """Write ``dream_time`` into our settings — that one top-level line, the rest of the file as it was. ``HH:MM`` (as
-    ``09:05``) or ``any``. A wrong value, or a file that cannot be read back as TOML, raises ValueError and nothing is
-    written. Returns the value kept."""
+def normal_time(value: str) -> str:
+    """``HH:MM`` (as ``09:05``) or ``any``; anything else raises ValueError."""
     value = value.strip().lower()
     hm = dream_time(value)
     if hm is None and value != ANY_TIME:
         raise ValueError(f"{value!r}: a time is HH:MM (24-hour, e.g. 23:00), or {ANY_TIME!r}")
-    kept = f"{hm[0]:02d}:{hm[1]:02d}" if hm else ANY_TIME
+    return f"{hm[0]:02d}:{hm[1]:02d}" if hm else ANY_TIME
+
+
+def set_time(homes: Homes, value: str) -> str:
+    """Write ``dream_time`` into our settings — that one top-level line, the rest of the file as it was. A wrong value
+    (see ``normal_time``), or a file that cannot be read back as TOML, raises ValueError and nothing is written.
+    Returns the value kept."""
+    kept = normal_time(value)
     try:
         text = homes.config.read_bytes().decode("utf-8") if homes.config.exists() else ""
         tomllib.loads(text)

@@ -3,7 +3,8 @@
 - ``dreamem hook session-start --client X`` (synchronous, well under a second): one line about the last finished night
   — counts only, never a fact's text — once a day, or again the same day when a newer night is there. Marked as
   shown only after it is printed. While no ``dream_time`` is chosen it also asks the agent to ask the person for one
-  (once a day, on three days at most), from the very first session after install, with or without a night.
+  (once a day, on three days at most, recorded in ``time-asked.json`` before it asks), from the very first session
+  after install, with or without a night.
 - ``dreamem hook session-start --client X --async`` (``async: true`` in the hook definition): ``dreamem run --if-due``
   in the background, printing an empty JSON object. Codex cancels a background hook when its session ends and Claude
   Code drops its output on ``/clear``: neither matters, the next session shows the new night.
@@ -23,6 +24,7 @@ from .lock import Lock
 from .paths import Homes
 
 ASK_DAYS = 3  # days on which the agent asks for a time before the default simply stays
+ASKED_FILE = "time-asked.json"
 ASK_TIME = (
     "agent-dreaming does not know yet when the person wants its nightly memory pass. In your first reply, ask them once, "
     "in one short line in their language, what time of day suits it: a time when this computer is usually on and they "
@@ -38,12 +40,19 @@ def newest_night(summary: dict) -> float:
                 if isinstance(e, dict)), default=0.0)
 
 
-def _ask_time(homes: Homes, summary: dict) -> bool:
-    """No time chosen yet, not asked today, asked on fewer than ASK_DAYS days."""
+def _ask_time(homes: Homes) -> bool:
+    """No time chosen yet, not asked today, asked on fewer than ASK_DAYS days — and the asking recorded before it is
+    made. The record is a file of its own that only this hook writes (one atomic replace, no lock): a pass holding the
+    lock for its half minute at session start cannot make a question go unrecorded and come again (Codex review of
+    PR #2). Two sessions starting in the same instant may both ask; that is all."""
     if config.load(homes)[0].get("dream_time"):
         return False
-    asked = summary.get("time_asked") or {}
-    return asked.get("on") != run.today() and int(asked.get("days") or 0) < ASK_DAYS
+    path = homes.dreaming / ASKED_FILE
+    asked = read_json(path, {}) or {}
+    if asked.get("on") == run.today() or int(asked.get("days") or 0) >= ASK_DAYS:
+        return False
+    write_json(path, {"on": run.today(), "days": int(asked.get("days") or 0) + 1})
+    return True
 
 
 def session_start(homes: Homes, client: str, *, background: bool = False, out=sys.stdout) -> int:
@@ -58,7 +67,10 @@ def session_start(homes: Homes, client: str, *, background: bool = False, out=sy
         line = None
         if not (shown.get("on") == run.today() and float(shown.get("night") or 0) >= night):
             line = report.summary_line(summary.get("profiles") or {})
-        ask = _ask_time(homes, summary)
+        try:
+            ask = _ask_time(homes)
+        except Exception:  # noqa: BLE001 - not recorded, not asked: the limits hold
+            ask = False
         if not line and not ask:
             out.write("{}\n")
             return 0
@@ -69,16 +81,14 @@ def session_start(homes: Homes, client: str, *, background: bool = False, out=sy
     out.write(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}},
                          ensure_ascii=False) + "\n")
     out.flush()
+    if not line:
+        return 0
     try:  # bookkeeping after the one answer: whatever fails here prints nothing more
         lock = Lock(homes.lock, wait=0.5)
         if lock.acquire():  # a pass running now writes its own summary; the next session shows that night
             try:
                 summary = read_json(homes.summary, {}) or {}
-                if line:
-                    summary["shown"] = {"on": run.today(), "night": night}
-                if ask:
-                    days = int((summary.get("time_asked") or {}).get("days") or 0)
-                    summary["time_asked"] = {"on": run.today(), "days": days + 1}
+                summary["shown"] = {"on": run.today(), "night": night}
                 write_json(homes.summary, summary)
             finally:
                 lock.release()
