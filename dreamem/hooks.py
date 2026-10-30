@@ -44,9 +44,13 @@ def session_start(homes: Homes, client: str, *, background: bool = False, out=sy
         if not line:
             out.write("{}\n")
             return 0
-        out.write(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": line}},
-                             ensure_ascii=False) + "\n")
-        out.flush()
+    except Exception:  # noqa: BLE001 - a hook must never break a session
+        out.write("{}\n")
+        return 0
+    out.write(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": line}},
+                         ensure_ascii=False) + "\n")
+    out.flush()
+    try:  # bookkeeping after the one answer: whatever fails here prints nothing more
         lock = Lock(homes.lock, wait=0.5)
         if lock.acquire():  # a pass running now writes its own summary; the next session shows that night
             try:
@@ -55,7 +59,6 @@ def session_start(homes: Homes, client: str, *, background: bool = False, out=sy
                 write_json(homes.summary, summary)
             finally:
                 lock.release()
-        return 0
-    except Exception:  # noqa: BLE001 - a hook must never break a session
-        out.write("{}\n")
-        return 0
+    except Exception:  # noqa: BLE001
+        pass
+    return 0

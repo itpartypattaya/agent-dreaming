@@ -17,6 +17,7 @@ first). Only ``reject`` and ``not-duplicates`` write — the engine's reject lis
 """
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from pathlib import Path
 
@@ -88,12 +89,15 @@ ANSWERS = {
 LATER = "later"  # any section: not now, ask again tomorrow
 
 
-def _same_text(shown, current) -> bool:
-    """Whether a question's text is the current version's: whole, or the engine's cut of it (200 characters); a
-    hidden text (a secret) cannot be compared and passes."""
-    if current is None or not shown or str(shown).startswith("[hidden"):
+def _same_text(item: dict, current) -> bool:
+    """Whether the text the night judged is the current version's. An item the engine cut (200 characters) or hid
+    carries the fingerprint of its whole text; the rest are compared whole. A prefix is never enough: a change past
+    the cut is a change (Codex review of 0.2.0)."""
+    if current is None:
         return True
-    return shown == current or (len(shown) >= 200 and current.startswith(shown))
+    if item.get("fingerprint"):
+        return item["fingerprint"] == engineapi.fingerprint(current)
+    return (item.get("content") or "") == current
 
 
 def _seen_key(item: dict) -> str:
@@ -101,7 +105,10 @@ def _seen_key(item: dict) -> str:
 
 
 def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, coverage_ok: bool,
-          max_questions: int, profile: str) -> tuple[list[dict], dict]:
+          max_questions: int, profile: str, night_tag: str | None = None) -> tuple[list[dict], dict]:
+    # Question ids carry the night: an answer meant for "Q1" of one night never lands on "Q1" of the next. The tag is
+    # the caller's (unique per published night; two nights may share a `generated_at` second).
+    night = night_tag or hashlib.sha1(str(result.get("generated_at") or "").encode("utf-8")).hexdigest()[:4]
     """The night's questions from the engine's JSON, and what was left out and why."""
     qs: list[dict] = []
     skipped: dict[str, int] = {}
@@ -112,7 +119,7 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
     def fact_q(section, item, **extra):
         fid = item.get("fact_id")
         state = facts.get(int(fid)) if str(fid).isdigit() else None
-        if state is not None and not _same_text(item.get("content"), state.get("content")):
+        if state is not None and not _same_text(item, state.get("content")):
             # Changed by another session while the night ran: the version read now is not the text the night
             # judged. Asked about tomorrow, with the text and the version that go together.
             skip("changed_during_pass")
@@ -169,7 +176,7 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
     first_of: dict = {}
     shown = 0
     for i, q in enumerate(qs, 1):
-        q["qid"] = f"Q{i}"
+        q["qid"] = f"Q{i}-{night}"
         q["profile"] = profile
         q["answer"] = None
         fid = q.get("fact_id")
@@ -191,26 +198,48 @@ def entry_key(entry: str) -> str:
     return engineapi.entry_key(entry)
 
 
+def _stamp(value):
+    try:
+        when = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    return when if when.tzinfo else when.astimezone()
+
+
 def reopen_undecided(state_dir: Path, previous: dict | None) -> dict:
-    """Remove the engine's cooldown marks of the last night's questions nobody answered; returns the counts."""
+    """Keep only the rests a person earned. A cooldown mark of the engine stays when it predates the last published
+    night, or belongs to a question of that night the person decided; every other one goes — the marks of questions
+    left open, of items the night held back (partial coverage, the same fact twice) and of a night that died before it
+    was published (its marks are newer than the last published one). Returns the counts of marks removed."""
     out = {"seen": 0, "asked": 0}
-    if not previous:
-        return out
-    open_qs = [q for q in previous.get("questions") or [] if q.get("status") in OPEN]
-    if not open_qs:
-        return out
     seen_path, asked_path = state_dir / "seen.json", state_dir / "asked.json"
     seen = read_json(seen_path, {}) or {}
     asked = read_json(asked_path, {}) or {}
-    pending = (seen.get("_pending") or {}).get("seen") or {}
-    for q in open_qs:
-        bucket, key = q.get("bucket"), q.get("seen_key")
-        if bucket and key and isinstance(seen.get(bucket), dict) and seen[bucket].pop(key, None) is not None:
+    published = _stamp((previous or {}).get("generated_at"))
+    decided = [q for q in (previous or {}).get("questions") or [] if q.get("status") in CLOSED]
+    keep_seen = {(q.get("bucket"), q.get("seen_key")) for q in decided if q.get("seen_key")}
+    keep_pairs = {q.get("proposal") for q in decided if q.get("section") == "duplicate"}
+    keep_asked = {q.get("entry_key") for q in decided if q.get("section") == "note_decay"}
+
+    def earned(record) -> bool:
+        at = _stamp(record.get("at")) if isinstance(record, dict) else None
+        return at is None or (published is not None and at < published)
+
+    for bucket, records in seen.items():
+        if bucket.startswith("_") or bucket == "dup_not" or not isinstance(records, dict):
+            continue
+        for key in list(records):
+            rec = records[key]
+            if earned(rec) or (bucket, key) in keep_seen or (
+                    bucket == "duplicate_pairs" and isinstance(rec, dict) and rec.get("proposal") in keep_pairs):
+                continue
+            records.pop(key)
             out["seen"] += 1
-            if isinstance(pending.get(bucket), list) and key in pending[bucket]:
-                pending[bucket].remove(key)
-        if q.get("section") == "note_decay" and asked.pop(q.get("entry_key"), None) is not None:
-            out["asked"] += 1
+    for key in list(asked):
+        if earned(asked[key]) or key in keep_asked:
+            continue
+        asked.pop(key)
+        out["asked"] += 1
     if out["seen"]:
         write_json(seen_path, seen)
     if out["asked"]:
@@ -242,9 +271,10 @@ def acks_for(state_dir: Path, previous: dict | None) -> dict | None:
 
 
 def find(doc: dict, qid: str) -> dict:
-    qid = qid.strip().upper()
+    """The question with exactly this id (night tag included)."""
+    qid = qid.strip()
     for q in doc.get("questions") or []:
-        if q["qid"] == qid:
+        if q["qid"].lower() == qid.lower():
             return q
     raise KeyError(f"no question {qid} in the night of {doc.get('generated_at')}")
 

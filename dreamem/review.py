@@ -61,12 +61,13 @@ def _refresh_summary(homes: Homes, profile: str, doc: dict) -> None:
 
 def _which(homes: Homes, qid: str, profile: str | None) -> str:
     names = _profiles(homes, profile)
-    hits = [n for n in names if any(q["qid"] == qid.upper() for q in _load(homes, n)["questions"])]
+    hits = [n for n in names if any(q["qid"].lower() == qid.strip().lower() for q in _load(homes, n)["questions"])]
     if len(hits) == 1:
         return hits[0]
     if not hits:
-        raise SystemExit(f"no question {qid}" + (f" in profile {profile}" if profile else ""))
-    raise SystemExit(f"{qid} is in several profiles ({', '.join(hits)}): add --profile")
+        raise LookupError(f"no question {qid}" + (f" in profile {profile}" if profile else "")
+                          + " — the night may have been replaced since it was shown: run `dreamem show` again")
+    raise LookupError(f"{qid} is in several profiles ({', '.join(hits)}): add --profile")
 
 
 def show(homes: Homes, *, profile: str | None = None, as_json: bool = False, include_all: bool = False, out=print) -> int:
@@ -123,9 +124,17 @@ def show(homes: Homes, *, profile: str | None = None, as_json: bool = False, inc
 def decide(homes: Homes, qid: str, answer: str, *, text: str | None = None, profile: str | None = None,
            out=print) -> int:
     with Lock(homes.lock, wait=10):
-        name = _which(homes, qid, profile)
+        try:
+            name = _which(homes, qid, profile)
+        except LookupError as exc:
+            out(f"error: {exc}")
+            return 2
         doc = _load(homes, name)
         q = questions.find(doc, qid)
+        if text and engineapi.classify(text):
+            out("error: that text holds a secret or an instruction to an agent; nothing was recorded — "
+                "ask the person to say it without it")
+            return 2
         try:
             todo = questions.decide(q, answer, text)
         except ValueError as exc:
@@ -134,9 +143,17 @@ def decide(homes: Homes, qid: str, answer: str, *, text: str | None = None, prof
         state_dir = homes.profile(name) / "state"
         try:
             if todo.get("local") == questions.REJECT:
-                # The fact's whole current text: a question may show it cut, and the reject list matches by text.
-                current = store.fact_text(doc.get("store"), q["fact_id"]) or q.get("content") or ""
-                engineapi.reject(state_dir, q["fact_id"], current, f"rejected in review ({q['qid']})")
+                # Only the text the person saw is rejected: the fact must still be at the version shown.
+                now = store.facts_state(doc.get("store"), [q["fact_id"]]).get(int(q["fact_id"])) or {}
+                if now.get("version_id") != q.get("version_id"):
+                    questions.undo(q)
+                    questions.failed(q, "changed_since")
+                    _save(homes, name, doc)
+                    out(f"error: fact #{q['fact_id']} changed since it was shown; nothing was rejected — show the "
+                        "person the current text")
+                    return 1
+                engineapi.reject(state_dir, q["fact_id"], now.get("content") or "",
+                                 f"rejected in review ({q['qid']})")
             elif todo.get("local") == questions.NOT_DUPLICATES:
                 engineapi.close_proposal(state_dir, q["proposal"], "not-duplicates")
         except (OSError, ValueError) as exc:
@@ -154,7 +171,11 @@ def decide(homes: Homes, qid: str, answer: str, *, text: str | None = None, prof
 def mark(homes: Homes, qid: str, what: str, *, detail: str | None = None, profile: str | None = None,
          out=print) -> int:
     with Lock(homes.lock, wait=10):
-        name = _which(homes, qid, profile)
+        try:
+            name = _which(homes, qid, profile)
+        except LookupError as exc:
+            out(f"error: {exc}")
+            return 2
         doc = _load(homes, name)
         q = questions.find(doc, qid)
         try:
@@ -165,6 +186,11 @@ def mark(homes: Homes, qid: str, what: str, *, detail: str | None = None, profil
                 if q.get("section") == "duplicate" and q.get("proposal"):
                     engineapi.close_proposal(homes.profile(name) / "state", q["proposal"], "stale")
             elif what == "undo":
+                state_dir = homes.profile(name) / "state"
+                if q.get("answer") == "reject":
+                    engineapi.unreject(state_dir, q["fact_id"])
+                elif q.get("answer") == "not-duplicates":
+                    engineapi.close_proposal(state_dir, q["proposal"], "undo")
                 questions.undo(q)
         except ValueError as exc:
             out(f"error: {exc}")

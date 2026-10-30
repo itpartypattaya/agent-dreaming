@@ -76,5 +76,9 @@ def reject(state_dir: Path, fact_id, content: str, reason: str = "") -> str:
     return dream.reject_fact(dream.state_files(state_dir), fact_id, content, reason)
 
 
+def unreject(state_dir: Path, fact_id) -> int:
+    return dream.unreject_fact(dream.state_files(state_dir), fact_id)
+
+
 def close_proposal(state_dir: Path, number: str, how: str) -> None:
     dream.close_proposal(dream.state_files(state_dir), number, how)

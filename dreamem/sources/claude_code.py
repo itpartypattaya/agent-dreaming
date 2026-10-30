@@ -9,7 +9,7 @@ Who wrote a ``type: user`` line is told by a combination of fields, not by one (
 - ``isMeta``, ``isSidechain`` (a subagent), ``isCompactSummary``, ``tool_result`` blocks — never a person.
 - No ``turnOrigin`` at all — slash commands, their output, "[Request interrupted…]". Versions older than the field
   sent a person's prompt as ``promptSource: sdk`` (Desktop) or with neither field: such a line counts as a person's only
-  when its ``version`` is older than every version seen writing ``turnOrigin``. Any other plain text without it is a
+  when its ``version`` is older than every version seen writing ``turnOrigin`` — never when no such version was seen. Any other plain text without it is a
   combination we do not know, and stays out (fail-closed), counted in the coverage.
 """
 from __future__ import annotations
@@ -162,7 +162,7 @@ def read(projects: Path, since: float, now: float | None = None) -> tuple[list[M
     # such a line is a person's when its version is older than every version seen writing turnOrigin.
     first_tagged = min(tagged) if tagged else None
     for version, obj, text, path in legacy:
-        if first_tagged is None or version < first_tagged:
+        if first_tagged is not None and version < first_tagged:
             cov.count(HUMAN)
             take(obj, text, path)
         else:

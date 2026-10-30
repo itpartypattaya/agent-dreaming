@@ -4215,7 +4215,8 @@ def night(*, memory, messages, state, acks=None, window_days=14, corr_days=30, m
     alerts = check_memory_loss(memory, state.snapshot, memory_text)
     if dups.alert:
         alerts.append(dups.alert)
-    diary = build_diary(window_days, len(facts), len(messages), promotions, decays, themes, md_dec,
+    # Themes are words of the person's messages: counted, never written into the diary.
+    diary = build_diary(window_days, len(facts), len(messages), promotions, decays, (), md_dec,
                         ephemeral_events, quarantined, len(suppressed), conflicts=published_conflicts, alerts=alerts)
     memory_sources = load_durable_memory_sources(memory)
 

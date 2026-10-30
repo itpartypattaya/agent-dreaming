@@ -59,15 +59,12 @@ def _stem(path: Path) -> str:
     return name[: -len(".jsonl.zst")] if name.endswith(".jsonl.zst") else name[: -len(".jsonl")]
 
 
-def _read_zst(path: Path) -> bytes:
-    with path.open("rb") as f:
-        return _zstd.ZstdDecompressor().stream_reader(f).read()
-
-
-def _load(plain: Path | None, packed: Path | None, cov: Coverage) -> bytes | None:
+def _open(plain: Path | None, packed: Path | None, cov: Coverage):
+    """A binary stream of the session's lines — the plain file, or the compressed one decompressed as it is read —
+    or None when it cannot be read (the coverage says why). Never read whole: a rollout may be hundreds of megabytes."""
     if plain is not None:
         try:
-            return plain.read_bytes()
+            return plain.open("rb")
         except FileNotFoundError:
             packed = packed or plain.with_name(plain.name + ".zst")  # compressed between the listing and now
         except OSError:
@@ -79,12 +76,27 @@ def _load(plain: Path | None, packed: Path | None, cov: Coverage) -> bytes | Non
         cov.partial("zstd_missing")
         return None
     try:
-        return _read_zst(packed)
+        handle = packed.open("rb")
     except FileNotFoundError:
         cov.partial("vanished")
-    except (OSError, _zstd.ZstdError, io.UnsupportedOperation):
-        cov.partial("bad_zstd")
-    return None
+        return None
+    except OSError:
+        cov.partial("unreadable")
+        return None
+    return io.BufferedReader(_zstd.ZstdDecompressor().stream_reader(handle, closefd=True))
+
+
+def _lines(stream, cov: Coverage):
+    """The lines of *stream*; a read or a decompression that fails half way makes the coverage partial."""
+    try:
+        yield from stream
+    except (OSError, ValueError) as exc:
+        cov.partial("bad_zstd" if _zstd is not None and isinstance(exc, _zstd.ZstdError) else "unreadable")
+    except Exception as exc:
+        if _zstd is not None and isinstance(exc, _zstd.ZstdError):
+            cov.partial("bad_zstd")
+        else:
+            raise
 
 
 def _first_meta(plain: Path | None, packed: Path | None) -> dict | None:
@@ -141,41 +153,42 @@ def read(dirs: list[Path], since: float, now: float | None = None) -> tuple[list
                 cov.count(kind)
                 cov.read += 1
                 continue
-        data = _load(pair.get("plain"), pair.get("zst"), cov)
-        if data is None:
+        stream = _open(pair.get("plain"), pair.get("zst"), cov)
+        if stream is None:
             continue
         cov.read += 1
         meta, kind, cwd, bad = None, UNKNOWN, "", 0
-        for obj, is_last in records(io.BytesIO(data), _wanted):
-            if obj is None:
-                if is_last:
-                    cov.note("cut_last_line")
-                else:
-                    bad += 1
-                continue
-            payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
-            if obj.get("type") == "session_meta" and meta is None:
-                meta = payload
-                kind = session_kind(meta)
-                cwd = str(meta.get("cwd") or "")
-                continue
-            if obj.get("type") != "response_item" or payload.get("type") != "message" or payload.get("role") != "user":
-                continue
-            blocks = payload.get("content") if isinstance(payload.get("content"), list) else []
-            texts = [b.get("text") for b in blocks if isinstance(b, dict) and b.get("type") == "input_text"
-                     and isinstance(b.get("text"), str)]
-            text = clean_text("\n".join(t for t in (clean_text(t) for t in texts) if t))
-            if not text or kind != HUMAN:
-                continue
-            ts = _ts(obj.get("timestamp"))
-            if ts is None or ts < since or ts > now + 86400:
-                continue
-            key = f"{stem}|{obj.get('timestamp')}|{text[:200]}"
-            if key in seen:
-                continue
-            seen.add(key)
-            sid = str((meta or {}).get("id") or (meta or {}).get("session_id") or stem)
-            out.append(Message(CLIENT, sid, ts, text, cwd=cwd, key=f"{CLIENT}:{key}"))
+        with stream:
+            for obj, is_last in records(_lines(stream, cov), _wanted):
+                if obj is None:
+                    if is_last:
+                        cov.note("cut_last_line")
+                    else:
+                        bad += 1
+                    continue
+                payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+                if obj.get("type") == "session_meta" and meta is None:
+                    meta = payload
+                    kind = session_kind(meta)
+                    cwd = str(meta.get("cwd") or "")
+                    continue
+                if obj.get("type") != "response_item" or payload.get("type") != "message" or payload.get("role") != "user":
+                    continue
+                blocks = payload.get("content") if isinstance(payload.get("content"), list) else []
+                texts = [b.get("text") for b in blocks if isinstance(b, dict) and b.get("type") == "input_text"
+                         and isinstance(b.get("text"), str)]
+                text = clean_text("\n".join(t for t in (clean_text(t) for t in texts) if t))
+                if not text or kind != HUMAN:
+                    continue
+                ts = _ts(obj.get("timestamp"))
+                if ts is None or ts < since or ts > now + 86400:
+                    continue
+                key = f"{stem}|{obj.get('timestamp')}|{text[:200]}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                sid = str((meta or {}).get("id") or (meta or {}).get("session_id") or stem)
+                out.append(Message(CLIENT, sid, ts, text, cwd=cwd, key=f"{CLIENT}:{key}"))
         cov.count(kind)
         if bad:
             cov.partial("bad_lines")

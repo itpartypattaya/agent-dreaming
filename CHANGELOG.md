@@ -18,6 +18,17 @@ The engine runs in process — a pass and the test suite are several times faste
   killed pass removes only its own `<name>.partial` files; transcripts are read line by line (a 250 MB transcript no
   longer sits in memory).
 - The session-start line orders nights by when they were published (two passes in one second are two nights).
+- Codex review (gpt-6.1-sol, 17 findings; 15 fixed with a test each, red before the fix):
+  question ids carry their night (`Q3-7f2a`), so an answer never lands on a question of a newer night; a fact's text is
+  compared whole (by fingerprint) with the version a question carries; `reject` refuses a fact changed since it was
+  shown; the lock is an OS file lock (no stale takeover, no age limit on a live holder); a note's name is screened like
+  its text; only decided questions rest — marks of held-back items and of a night that died before it was published
+  are dropped; `undo` lifts a rejection or a "not duplicates" too; a quarantined instruction keeps no preview; an
+  answer's `--text` with a secret is refused; `forget-sweep` removes the recorded tool answer too; unmarked SDK lines
+  stay unknown unless an older Claude Code version is proven; the hook prints exactly one JSON document; Codex rollouts
+  are streamed, compressed ones too; a state or settings file in a foreign encoding no longer stops the pass; themes
+  (words of messages) are no longer kept. Not fixable here: version pinning of writes other than merge
+  (holographic-memory#2), and SQLite creating `-wal`/`-shm` side files when reading a WAL database (documented).
 
 ## 0.1.0 — 2026-10-30
 

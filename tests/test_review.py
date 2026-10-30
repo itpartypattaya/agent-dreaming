@@ -2,6 +2,7 @@
 to make and never makes one; reject and not-duplicates go to the engine's own lists; undo touches no memory."""
 import io
 import json
+import re
 
 import pytest
 
@@ -106,7 +107,7 @@ def test_list_and_status(world, capsys):
     night(world)
     lines = []
     review.listing(world.homes, out=lines.append)
-    assert lines == ["global Q1 new_fact generated"]
+    assert len(lines) == 1 and re.fullmatch(r"global Q1-[0-9a-f]{4} new_fact generated", lines[0])
     out = io.StringIO()
     run.status(world.homes, out=out)
     assert "profile global" in out.getvalue() and "open 1" in out.getvalue()

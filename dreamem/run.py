@@ -110,11 +110,12 @@ def _message(m) -> dict:
 
 
 def _without_words(result: dict) -> dict:
-    """The night's output as it is kept: the person's words (evidence snippets, theme samples) left out — they were
-    read for the night and are not stored."""
+    """The night's output as it is kept: the person's words (evidence snippets, themes and their samples) and the
+    previews of quarantined facts left out — read for the night, not stored."""
     def strip(node):
         if isinstance(node, dict):
-            return {k: strip(v) for k, v in node.items() if k not in ("evidence", "sample")}
+            return {k: strip(v) for k, v in node.items() if k not in ("evidence", "sample", "preview",
+                                                                      "emerging_themes")}
         if isinstance(node, list):
             return [strip(v) for v in node]
         return node
@@ -123,7 +124,10 @@ def _without_words(result: dict) -> dict:
 
 def pass_profile(pdir: Path, profile: config.Profile, settings: dict, tz: str, data: dict) -> dict:
     """One profile's night; returns its summary entry (``error`` set when the engine failed)."""
-    shutil.rmtree(pdir / "home", ignore_errors=True)  # the shadow home of 0.1.0 held copies of notes: gone
+    # What 0.1.0 kept: the shadow home (copies of notes), its index and log — gone.
+    shutil.rmtree(pdir / "home", ignore_errors=True)
+    for legacy in ("notes.json", "engine.log"):
+        (pdir / legacy).unlink(missing_ok=True)
     state_dir = pdir / "state"
     previous = read_json(pdir / "questions.json")
     reopened = questions.reopen_undecided(state_dir, previous)
@@ -156,7 +160,8 @@ def pass_profile(pdir: Path, profile: config.Profile, settings: dict, tz: str, d
     facts = store.facts_state(profile.store, ids)
     qs, skipped = questions.build(result, store=str(profile.store) if profile.store else None, facts=facts,
                                   notes_index=index, coverage_ok=coverage_ok,
-                                  max_questions=int(settings.get("max_questions", 7)), profile=profile.name)
+                                  max_questions=int(settings.get("max_questions", 7)), profile=profile.name,
+                                  night_tag=uuid.uuid4().hex[:4])
     alerts = [a for a in result.get("alerts") or []
               if coverage_ok or a.get("kind") not in ("memory_loss", "entry_truncated", "probe_missing")]
     doc = {"generated_at": result["generated_at"], "profile": profile.name,
@@ -191,6 +196,7 @@ def run(homes: Homes, *, if_due: bool = False, dry_run: bool = False, only: list
         if if_due and not due(homes):
             return 0
         remove_partials(homes.dreaming)
+        shutil.rmtree(homes.dreaming / "lock.d", ignore_errors=True)  # 0.1.0's lock directory
         now = time.time()
         tz = config.timezone_name(settings.get("timezone", "auto"))
         data = gather(homes, settings, now)
@@ -257,10 +263,11 @@ def forget_sweep(homes: Homes, out=sys.stdout) -> int:
             for q in doc["questions"]:
                 ids = {q.get("fact_id")} | {(q.get(s) or {}).get("fact_id") for s in ("keep", "copy")}
                 if gone & {i for i in ids if isinstance(i, int)}:
-                    for k in ("content", "keep", "copy", "why", "conflicts", "call", "text"):
+                    for k in ("content", "keep", "copy", "why", "conflicts", "call", "text", "result", "note"):
                         q.pop(k, None)
+                    q["failure"] = "forgotten"
                     if q["status"] in questions.OPEN:
-                        q["status"], q["failure"] = questions.FAILED, "forgotten"
+                        q["status"] = questions.FAILED
                     scrubbed += 1
             if scrubbed:
                 write_json(pdir / "questions.json", doc)

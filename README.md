@@ -68,7 +68,7 @@ Without it, the first session of the day runs the pass in the background ("lazy 
 |---|---|
 | Reads | `~/.claude/projects/*/*.jsonl` (transcripts), `~/.claude/projects/*/memory/*.md` (auto-memory), `~/.codex/sessions/**` (`.jsonl` and `.jsonl.zst`), `~/.codex/memories*/`, `CLAUDE.md` / `AGENTS.md`, holographic-memory's database (read-only). Locations follow `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HOLOMEM_HOME`. |
 | Writes | only `~/.dreaming` (or `DREAMEM_HOME`): its state, the questions, `report.md`. Your messages are read in memory for the pass and stored nowhere — not even as snippets. |
-| Never | writes to memory, transcripts, Claude or Codex settings; sends anything over the network; runs a model. Memory changes are made by your agent, in a session, on your answer. |
+| Never | writes to memory, transcripts, Claude or Codex settings; sends anything over the network; runs a model. Memory changes are made by your agent, in a session, on your answer. (SQLite itself may create the `-wal`/`-shm` files next to the holographic-memory database when it reads a database in WAL mode whose writer is not running, as any reader does; the database is never written.) |
 
 Details: [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md).
 

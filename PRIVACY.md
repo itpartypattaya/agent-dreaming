@@ -8,7 +8,8 @@ connections: the pass is a local program that reads files and writes a report.
 - Claude Code transcripts (`<config dir>/projects/*/*.jsonl`) and auto-memory notes (`projects/*/memory/*.md`).
 - Codex CLI sessions (`$CODEX_HOME/sessions`, `archived_sessions`) and memories (`memories*/`).
 - `CLAUDE.md` / `AGENTS.md` instruction files (to avoid asking about what they already say).
-- The holographic-memory database, opened read-only.
+- The holographic-memory database, opened read-only (SQLite may create its `-wal`/`-shm` side files, as for any
+  reader of a database in WAL mode; the database itself is never written).
 
 Of the transcripts it keeps only what you typed yourself, within the window (30 days by default).
 

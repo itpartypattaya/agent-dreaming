@@ -33,7 +33,7 @@ class Homes:
 
     @property
     def lock(self) -> Path:
-        return self.dreaming / "lock.d"
+        return self.dreaming / "lock"
 
     @property
     def config(self) -> Path:

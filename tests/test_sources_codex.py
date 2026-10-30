@@ -52,7 +52,8 @@ def test_compressed_between_listing_and_reading(world):
     plain, _packed = world.rollout([(days_ago(1), "user", "сжали на лету")], zst=True)
     plain.unlink()
     cov = Coverage("codex")
-    data = codex._load(plain, None, cov)  # listed as plain, gone when opened: read as .zst
+    with codex._open(plain, None, cov) as stream:  # listed as plain, gone when opened: read as .zst
+        data = stream.read()
     assert "сжали на лету".encode() in data and cov.status == COMPLETE
 
 

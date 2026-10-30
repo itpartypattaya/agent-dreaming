@@ -51,7 +51,7 @@ def load(homes: Homes) -> tuple[dict, list[str]]:
         raw = tomllib.loads(homes.config.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return dict(DEFAULTS), []
-    except (OSError, tomllib.TOMLDecodeError) as exc:
+    except (OSError, ValueError) as exc:  # TOMLDecodeError and UnicodeDecodeError are ValueErrors
         return dict(DEFAULTS), [f"{homes.config}: {type(exc).__name__} — defaults used"]
     unknown = sorted(set(raw) - set(DEFAULTS))
     return _merge(DEFAULTS, {k: v for k, v in raw.items() if k in DEFAULTS}), [f"unknown setting: {k}" for k in unknown]

@@ -29,12 +29,12 @@ def read_json(path: Path, default=None):
     """The JSON of *path*, or *default* when it is missing. A broken file is set aside as ``<name>.corrupt-<n>`` and
     *default* returned: one bad write must not stop every later pass."""
     try:
-        text = path.read_text(encoding="utf-8")
+        raw = path.read_bytes()
     except FileNotFoundError:
         return default
     try:
-        return json.loads(text)
-    except ValueError:
+        return json.loads(raw.decode("utf-8"))
+    except ValueError:  # UnicodeDecodeError is a ValueError too
         n = 1
         while path.with_name(f"{path.name}.corrupt-{n}").exists():
             n += 1

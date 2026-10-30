@@ -38,21 +38,26 @@ It changed nothing. Your job here is to put the questions to the person and carr
    - `note_decay` — a Claude Code memory note nobody mentioned lately: **keep** / **outdated**. Nothing is written:
      tell the person the note's name and project; they can delete or fix it themselves or in a session of that project.
    - any: **later**.
-3. Record the answer: `dreamem decide Q3 <answer> [--text "..."]`. It prints one of:
+3. Record the answer with the question's id exactly as `dreamem show` printed it (`Q3-7f2a`: the tag is the night's,
+   so an answer never lands on a question of a newer night): `dreamem decide Q3-7f2a <answer> [--text "..."]`. A
+   `--text` holding a secret or an instruction is refused — ask the person to say it without it. It prints one of:
    - nothing to call → done with this question;
    - a JSON with `call` (`tool` + `args`) and `check` → go on to 4.
 4. Checks, right before the call:
    - `memory_stats`: its `database` must be the same file as `check.database`. Otherwise stop: this session's store is
      another one (a per-project store); tell the person to answer it in a session of that project.
    - every call except `memory_merge`: `memory_history {fact_id}` — the current version must be
-     `check.version.version_id`. Otherwise the fact changed since the night: `dreamem failed Q3 --reason changed_since`,
+     `check.version.version_id`. Otherwise the fact changed since the night: `dreamem failed Q3-7f2a --reason changed_since`,
      show the person the current text, and ask again if they want.
-   - `memory_merge` carries `expect`; the store itself refuses a changed pair.
+   - `memory_merge` carries `expect`; the store itself refuses a changed pair. The other writes cannot be pinned to a
+     version by the store yet (holographic-memory issue #2): call `memory_history` right before the write, nothing
+     in between.
 5. Make exactly the printed call (same tool, same arguments). Then:
-   - success → `dreamem applied Q3 --result '<short summary of the answer>'`;
-   - refused (`changed_since`, not found, any error) → `dreamem failed Q3 --reason '<what it said>'`, and tell the person
+   - success → `dreamem applied Q3-7f2a --result '<short summary of the answer>'`;
+   - refused (`changed_since`, not found, any error) → `dreamem failed Q3-7f2a --reason '<what it said>'`, and tell the person
      the question will come back with the current texts.
-6. A mistake in a recorded answer → `dreamem undo Q3`. That only cancels the record; a memory call already made is
+6. A mistake in a recorded answer → `dreamem undo Q3-7f2a`. It cancels the record (and a `reject` or
+   `not-duplicates` with it); a memory call already made is
    undone with `memory_revert` (change/correct) or not at all (merge, forget) — say so honestly.
 7. At the end: one or two lines for the person — what was changed, what was left for later. No ids, JSON or paths.
 

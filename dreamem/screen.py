@@ -38,7 +38,7 @@ def messages(items: list[Message], max_chars: int) -> tuple[list[Message], dict]
 def notes(items: list[Note]) -> tuple[list[Note], dict]:
     kept, counts = [], {}
     for n in items:
-        unsafe = engineapi.classify(n.text)
+        unsafe = engineapi.classify(f"{n.name}\n{n.text}")  # the name is shown too
         if unsafe:
             counts[unsafe] = counts.get(unsafe, 0) + 1
             continue
