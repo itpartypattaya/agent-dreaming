@@ -126,3 +126,15 @@ def test_an_old_block_with_another_python_is_replaced_not_kept():
     new = install.codex_text(_codex_appended(old, "[tui]\nalt_screen = false\n"))
     assert "C:/old/python.exe" not in new and "old\\python" not in new
     assert len(tomllib.loads(new)["hooks"]["SessionStart"]) == 2 and tomllib.loads(new)["tui"]["alt_screen"] is False
+
+
+def test_our_hooks_are_known_with_a_comment_or_spaces_in_the_header():
+    """Codex review of PR #4: a hand-added comment or spaces in a table header are still the same TOML table."""
+    edited = install.codex_text(USER)
+    edited = edited.replace("[[hooks.SessionStart.hooks]]\n", "[[ hooks.SessionStart.hooks ]] # session hook\n", 1)
+    edited = edited.replace("[[hooks.SessionStart]]\n", "[[hooks.SessionStart]]   # dreaming\n", 1)
+    assert len(tomllib.loads(edited)["hooks"]["SessionStart"]) == 2
+    again = install.codex_text(edited)
+    assert len(tomllib.loads(again)["hooks"]["SessionStart"]) == 2
+    removed = install.codex_text(edited, remove=True)
+    assert "dreamem" not in removed and "hooks" not in tomllib.loads(removed)

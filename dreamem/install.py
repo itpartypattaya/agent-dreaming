@@ -90,10 +90,14 @@ def _foreign(inner: str) -> str:
         if line.lstrip().startswith("["):
             chunks.append([])
         chunks[-1].append(line)
-    ours = [len(c) > 0 and c[0].strip() == "[[hooks.SessionStart.hooks]]" and
+    def header(chunk: list[str]) -> str:
+        """The table a header names, as TOML reads it: no trailing comment, no spaces (Codex review of PR #4)."""
+        return "".join(chunk[0].split("#", 1)[0].split()) if chunk else ""
+
+    ours = [header(c) == "[[hooks.SessionStart.hooks]]" and
             any("dreamem hook session-start" in line for line in c) for c in chunks]
     for i, c in enumerate(chunks):
-        if (c and c[0].strip() == "[[hooks.SessionStart]]" and not any(line.strip() for line in c[1:])
+        if (header(c) == "[[hooks.SessionStart]]" and not any(line.strip() for line in c[1:])
                 and i + 1 < len(chunks) and ours[i + 1]):
             ours[i] = True
     kept = "\n".join(line for c, mine in zip(chunks, ours, strict=True) if not mine for line in c)
