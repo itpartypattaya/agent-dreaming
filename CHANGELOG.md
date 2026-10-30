@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — 2026-10-31
+
+- The time of the pass is the person's: `dream_time = "HH:MM"` (or `dreamem config time 23:00`) — the first session
+  after that time runs it, not the first session of the calendar day; `any` keeps the old rule. Until a time is chosen,
+  the session-start hook asks the agent to ask the person once (from the first session after install, once a day, on
+  three days at most), and `dreamem install codex` asks in the terminal (or takes `--time 23:00`). `dreamem install
+  schedule` uses the time. `dreamem status` shows it. `--dry-run` with `--time` previews the time and keeps nothing;
+  the asking is recorded in its own `time-asked.json` before it is made, so a pass holding the lock cannot lift the
+  once-a-day and three-day limits (Codex review of PR #2).
+
 ## 0.2.0 — 2026-10-30
 
 The engine works on direct inputs. `dream.night()` takes the person's messages, the memory notes, the fact store's

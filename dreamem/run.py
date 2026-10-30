@@ -14,7 +14,8 @@ import shutil
 import sys
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
+from datetime import time as dtime
 from pathlib import Path
 
 from . import config, notes, questions, report, screen, store
@@ -32,9 +33,21 @@ def today() -> str:
     return datetime.now().astimezone().strftime("%Y-%m-%d")
 
 
-def due(homes: Homes) -> bool:
+def due(homes: Homes, now: datetime | None = None) -> bool:
+    """No pass has succeeded since the person's ``dream_time`` last came round (23:00: a session at 22:00 waits, one at
+    23:10 runs, one at 00:30 after it does not); without a chosen time, none has succeeded on this calendar day."""
+    now = now or datetime.now().astimezone()
     last = (read_json(homes.summary, {}) or {}).get("last_success") or ""
-    return last[:10] < today()
+    at = config.dream_time(config.load(homes)[0].get("dream_time"))
+    if at is None:
+        return last[:10] < now.strftime("%Y-%m-%d")
+    boundary = datetime.combine(now.date(), dtime(*at)).astimezone()
+    if now < boundary:
+        boundary = datetime.combine(now.date() - timedelta(days=1), dtime(*at)).astimezone()
+    try:
+        return datetime.fromisoformat(last) < boundary
+    except (TypeError, ValueError):
+        return True
 
 
 class _Projects:
@@ -297,6 +310,8 @@ def status(homes: Homes, out=sys.stdout) -> int:
         cov = ", ".join(f"{k} {v}" for k, v in (entry.get("coverage") or {}).items())
         print(f"profile {p.name}: store {p.store or 'none'}; last night {entry.get('generated_at', 'never')}; "
               f"open {entry.get('open', 0)}{'; coverage ' + cov if cov else ''}{err}", file=out)
+    chosen = settings.get("dream_time") or "not chosen (the first session of each day)"
+    print(f"dream time: {'the first session of each day' if chosen == config.ANY_TIME else chosen}", file=out)
     print(f"last success: {summary.get('last_success', 'never')}; due now: {due(homes)}", file=out)
     for w in warnings:
         print(f"warning: {w}", file=out)

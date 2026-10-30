@@ -9,8 +9,11 @@ Codex CLI: one marked block at the end of ``~/.codex/config.toml`` with the two 
 the new TOML must parse, ``--dry-run`` shows the diff and writes nothing, ``--uninstall`` removes exactly what was
 added. Codex runs a hook only once it is trusted: open ``/hooks`` in Codex and trust the two.
 
-Schedule (optional): a daily run at 04:00 that catches up after sleep — Task Scheduler on Windows (``StartWhenAvailable``),
-launchd on macOS, a systemd user timer with ``Persistent=true`` on Linux. ``--dry-run`` prints it.
+Both ask for the time of the pass when none is chosen: ``install codex`` in a terminal, the plugin through the agent
+in the first session (the SessionStart hook asks it to).
+
+Schedule (optional): a daily run at the chosen time (04:00 if none) that catches up after sleep — Task Scheduler on
+Windows (``StartWhenAvailable``), launchd on macOS, a systemd user timer with ``Persistent=true`` on Linux. ``--dry-run`` prints it.
 """
 from __future__ import annotations
 
@@ -25,6 +28,7 @@ import tomllib
 from importlib import resources
 from pathlib import Path
 
+from . import config
 from .paths import Homes
 
 MARK_BEGIN = "# >>> agent-dreaming (dreamem install codex) >>>"
@@ -112,7 +116,34 @@ def _write(path: Path, old: str, new: str, dry_run: bool, out) -> bool:
     return True
 
 
-def install_codex(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdout) -> int:
+TIME_QUESTION = ("What time of day suits the nightly pass? A time when this computer is usually on "
+                 "(HH:MM, 24-hour; Enter: the first session of each day): ")
+
+
+def _interactive(question: str) -> str:
+    if not (sys.stdin and sys.stdin.isatty()):
+        raise EOFError  # not a terminal: the agent asks in the first session instead
+    return input(question)
+
+
+def ask_time(homes: Homes, prompt, out) -> None:
+    """Ask for ``dream_time`` when none is chosen; an empty answer is "no preference" (``any``)."""
+    if config.load(homes)[0].get("dream_time"):
+        return
+    for _ in range(3):
+        try:
+            answer = prompt(TIME_QUESTION).strip()
+        except EOFError:
+            return
+        answer = answer or config.ANY_TIME
+        try:
+            print(f"dream time: {config.set_time(homes, answer)}", file=out)
+            return
+        except ValueError as exc:
+            print(exc, file=out)
+
+
+def install_codex(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdout, prompt=_interactive) -> int:
     path = homes.codex / "config.toml"
     old = path.read_text(encoding="utf-8") if path.exists() else ""
     new = codex_text(old, remove=remove)
@@ -138,6 +169,8 @@ def install_codex(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdout) 
         print(f"{'would remove' if dry_run else 'removed'}: {skill}", file=out)
     else:
         _write(skill, old_skill, skill_text("dreaming"), dry_run, out)
+    if not remove and not dry_run:
+        ask_time(homes, prompt, out)
     if written and not remove:
         print("Codex runs a hook only once it is trusted: open /hooks in Codex and trust the two dreaming hooks.",
               file=out)
@@ -164,15 +197,16 @@ def install_claude(*, remove: bool, dry_run: bool, run_it: bool, out=sys.stdout)
     return 0
 
 
-def schedule_spec(platform: str | None = None) -> tuple[str, str]:
-    """(file name, content) of the daily job for this platform."""
+def schedule_spec(platform: str | None = None, at: str = "04:00") -> tuple[str, str]:
+    """(file name, content) of the daily job for this platform, at *at* (HH:MM, local time)."""
     platform = platform or sys.platform
+    hour, minute = config.dream_time(at) or (4, 0)
     if platform == "win32":
         python = str(Path(sys.executable))
         return (f"{TASK}.xml", f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>agent-dreaming: the nightly memory review (read-only)</Description></RegistrationInfo>
-  <Triggers><CalendarTrigger><StartBoundary>2026-01-01T04:00:00</StartBoundary><Enabled>true</Enabled>
+  <Triggers><CalendarTrigger><StartBoundary>2026-01-01T{hour:02d}:{minute:02d}:00</StartBoundary><Enabled>true</Enabled>
     <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay></CalendarTrigger></Triggers>
   <Settings><StartWhenAvailable>true</StartWhenAvailable><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><ExecutionTimeLimit>PT30M</ExecutionTimeLimit>
@@ -187,7 +221,7 @@ def schedule_spec(platform: str | None = None) -> tuple[str, str]:
   <key>Label</key><string>com.agent-dreaming</string>
   <key>ProgramArguments</key><array><string>{python_path()}</string><string>-I</string><string>-m</string>
     <string>dreamem</string><string>run</string><string>--if-due</string></array>
-  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>0</integer></dict>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>{hour}</integer><key>Minute</key><integer>{minute}</integer></dict>
 </dict></plist>
 """)
     return ("agent-dreaming.service + agent-dreaming.timer", f"""# ~/.config/systemd/user/agent-dreaming.service
@@ -199,15 +233,17 @@ ExecStart={python_path()} -I -m dreamem run --if-due
 
 # ~/.config/systemd/user/agent-dreaming.timer
 [Timer]
-OnCalendar=*-*-* 04:00:00
+OnCalendar=*-*-* {hour:02d}:{minute:02d}:00
 Persistent=true
 [Install]
 WantedBy=timers.target
 """)
 
 
-def install_schedule(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdout) -> int:
-    name, content = schedule_spec()
+def install_schedule(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdout, at: str | None = None) -> int:
+    """*at*: a time given on the command line (a ``--dry-run`` previews it without keeping it); else the setting."""
+    chosen = at or config.load(homes)[0].get("dream_time")
+    name, content = schedule_spec(at=chosen if config.dream_time(chosen) else "04:00")
     if sys.platform != "win32":
         print(f"{name}:\n{content}", file=out)
         print("Put these files in place and enable them yourself (launchctl load / systemctl --user enable --now "
