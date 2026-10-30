@@ -88,6 +88,37 @@ class World:
                  (fid, content), db)
         self.sql("update facts set content=? where fact_id=?", (content, fid), db)
 
+    def outcome(self, outcome, reason, *, emitted=(), named=(), correction="", days_old=0.5, supersedes=None,
+                attempt=None, event=None, db=None):
+        """An attempt (the facts a recall offered, at their current version) and the agent's outcome against it, as
+        holographic-memory 0.4+ writes them (``experience = true``). Returns (attempt_id, event_id)."""
+        self.sql("CREATE TABLE IF NOT EXISTS memory_attempts (attempt_id TEXT PRIMARY KEY, created_at REAL NOT NULL, "
+                 "kind TEXT NOT NULL, session_key TEXT NOT NULL, stages TEXT NOT NULL, emitted TEXT NOT NULL, "
+                 "trace_status TEXT NOT NULL)", db=db)
+        self.sql("CREATE TABLE IF NOT EXISTS memory_attempt_refs (attempt_id TEXT NOT NULL, fact_id INTEGER NOT NULL, "
+                 "version_id INTEGER NOT NULL, PRIMARY KEY (attempt_id, fact_id, version_id))", db=db)
+        self.sql("CREATE TABLE IF NOT EXISTS memory_outcomes (event_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, "
+                 "created_at REAL NOT NULL, origin_signal_id TEXT NOT NULL UNIQUE, supersedes TEXT UNIQUE, "
+                 "payload TEXT NOT NULL)", db=db)
+        at = days_ago(days_old)
+        ref = lambda fid: {"fact_id": fid, "version_id": self.version(fid, db)}  # noqa: E731
+        if attempt is None:
+            attempt = uuid.uuid4().hex
+            issued = [ref(f) for f in emitted]
+            self.sql("INSERT INTO memory_attempts VALUES (?,?,?,?,?,?,?)",
+                     (attempt, at, "prefetch", hashlib.sha256(attempt.encode()).hexdigest(), "[]", json.dumps(issued),
+                      "not_recorded"), db)
+            for r in issued:
+                self.sql("INSERT INTO memory_attempt_refs VALUES (?,?,?)", (attempt, r["fact_id"], r["version_id"]), db)
+        event = event or uuid.uuid4().hex
+        payload = {"event_id": event, "outcome": outcome, "reason": reason, "correction": correction, "task": "",
+                   "correction_refs": [ref(f) for f in named], "actor": "agent", "human_verified": False,
+                   "supersedes": supersedes}
+        n = self.sql("select count(*) from memory_outcomes where attempt_id=?", (attempt,), db)[0][0]
+        self.sql("INSERT INTO memory_outcomes VALUES (?,?,?,?,?,?)",
+                 (event, attempt, at, f"{attempt}:{n}", supersedes, json.dumps(payload, sort_keys=True)), db)
+        return attempt, event
+
     def forget(self, fid, db=None):
         self.sql("delete from facts where fact_id=?", (fid,), db)
         self.sql("delete from fact_versions where fact_id=?", (fid,), db)

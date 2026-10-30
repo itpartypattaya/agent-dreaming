@@ -29,7 +29,7 @@ OPEN = (GENERATED, SHOWN, FAILED, DEFERRED)
 CLOSED = (DECIDED, APPLIED)
 
 # Asked first: what may be wrong in memory now, then what may be missing, then the notes.
-ORDER = ("duplicate", "conflict", "fact_decay", "review", "new_fact", "promotion", "confirm", "trust_feedback",
+ORDER = ("duplicate", "conflict", "outcome", "fact_decay", "review", "new_fact", "promotion", "confirm", "trust_feedback",
          "note_decay")
 BUCKET = {"duplicate": "duplicate_pairs", "conflict": "conflicts", "fact_decay": "fact_decays", "review": "promotions",
           "new_fact": "new_facts", "promotion": "promotions", "confirm": "confirm", "trust_feedback": "trust_feedback"}
@@ -80,6 +80,9 @@ ANSWERS = {
     "trust_feedback": {"yes": _feedback("unhelpful"), "no": NOTHING},
     "fact_decay": {"keep": _feedback("confirmed"), "outdated": _end, "changed": _change("memory_change"),
                    "wrong": _change("memory_correct"), "forget": _forget},
+    # an answer that used it went wrong, by the agent's own report in holographic-memory's journal
+    "outcome": {"keep": _feedback("confirmed"), "outdated": _end, "changed": _change("memory_change"),
+                "wrong": _change("memory_correct"), "forget": _forget},
     "conflict": {"changed": _change("memory_change"), "outdated": _end, "wrong": _change("memory_correct"),
                  "keep": NOTHING},
     "duplicate": {"yes": _merge, "not-duplicates": NOT_DUPLICATES},
@@ -105,7 +108,8 @@ def _seen_key(item: dict) -> str:
 
 
 def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, coverage_ok: bool,
-          max_questions: int, profile: str, night_tag: str | None = None) -> tuple[list[dict], dict]:
+          max_questions: int, profile: str, night_tag: str | None = None, went_wrong: list[dict] | None = None,
+          answered: set | None = None, rejected: set | None = None) -> tuple[list[dict], dict]:
     # Question ids carry the night: an answer meant for "Q1" of one night never lands on "Q1" of the next. The tag is
     # the caller's (unique per published night; two nights may share a `generated_at` second).
     night = night_tag or hashlib.sha1(str(result.get("generated_at") or "").encode("utf-8")).hexdigest()[:4]
@@ -136,6 +140,25 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
                    "why": item.get("why"), "store": item.get("store") or store})
     for item in result.get("conflicts") or []:
         fact_q("conflict", item, conflicts=item.get("conflicts"))
+    for item in went_wrong or []:
+        state = facts.get(int(item["fact_id"]))
+        if set(item["events"]) <= (answered or set()):
+            skip("outcome:answered")
+        elif state is None or state.get("content") is None:
+            skip("outcome:gone")  # ended or forgotten since
+        elif state.get("version_id") != item["version_id"]:
+            skip("outcome:changed_since")  # changed after the answer went wrong: the problem is likely handled
+        elif engineapi.fingerprint(state["content"]) in (rejected or set()):
+            skip("outcome:rejected")
+        else:
+            correction = item.get("correction")
+            if correction and engineapi.classify(correction):
+                correction = None  # a secret or an instruction to an agent in the agent's line: not shown
+            qs.append({"section": "outcome", "bucket": None, "seen_key": None, "fact_id": item["fact_id"],
+                       "version_id": state.get("version_id"), "origin": state.get("origin"),
+                       "content": state["content"], "store": store,
+                       "outcome": {"events": item["events"], "named": item["named"], "attempts": item["attempts"],
+                                   "last_at": item["last_at"], "correction": correction}})
     for item in result.get("fact_decays") or []:
         if not coverage_ok:
             skip("fact_decay:coverage")
@@ -196,6 +219,30 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
 
 def entry_key(entry: str) -> str:
     return engineapi.entry_key(entry)
+
+
+OUTCOMES_FILE = "outcomes.json"  # in a profile's state: journal events a person has answered about
+
+
+def outcomes_answered(state_dir: Path) -> set:
+    data = read_json(state_dir / OUTCOMES_FILE, {}) or {}
+    return set(data) if isinstance(data, dict) else set()
+
+
+def answer_outcomes(state_dir: Path, q: dict, answered: bool) -> None:
+    """Record (or, on undo, drop) the journal events an ``outcome`` question was about: an event a person answered is
+    not asked about again; a new one about the same fact is."""
+    events = (q.get("outcome") or {}).get("events") or []
+    if q.get("section") != "outcome" or not events:
+        return
+    data = read_json(state_dir / OUTCOMES_FILE, {}) or {}
+    data = data if isinstance(data, dict) else {}
+    for e in events:
+        if answered:
+            data[e] = {"qid": q["qid"], "answer": q.get("answer"), "at": q.get("decided_at")}
+        else:
+            data.pop(e, None)
+    write_json(state_dir / OUTCOMES_FILE, data)
 
 
 def _stamp(value):

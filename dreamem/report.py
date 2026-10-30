@@ -9,6 +9,7 @@ from .questions import CLOSED, DEFERRED, OPEN
 SECTION_TITLE = {
     "duplicate": "look like one fact — merge?",
     "conflict": "conflicts with what memory says",
+    "outcome": "an answer that used it went wrong — still true?",
     "fact_decay": "not mentioned for long — still true?",
     "review": "corroborated, but nobody said it is so — confirm?",
     "new_fact": "an agent stored this lately — is it right?",
@@ -48,7 +49,22 @@ def question_text(q: dict) -> str:
         line += f" Memory: {_q(other.get('entry') or other.get('content'), 200)}"
     if q.get("why") and s in ("review", "promotion", "fact_decay"):
         line += f" ({q['why']})"
+    if s == "outcome" and q.get("outcome"):
+        line += f" ({outcome_why(q['outcome'])})"
     return line
+
+
+def outcome_why(o: dict) -> str:
+    """Why an outcome question is asked: who named the fact, when, the agent's correction line."""
+    try:
+        days = max(0, int((datetime.now().timestamp() - float(o.get("last_at") or 0)) // 86400))
+    except (TypeError, ValueError):
+        days = 0
+    when = "today" if days == 0 else "yesterday" if days == 1 else f"{days} days ago"
+    head = (f"named by an agent's correction, the last {when}" if o.get("named") else
+            f"offered in {o.get('attempts')} answers that went wrong, the last {when}")
+    correction = f"; the correction: {_q(o['correction'], 200)}" if o.get("correction") else ""
+    return f"{head}{correction}; the agent's report, not the person's"
 
 
 def local_time(stamp: str) -> str:
@@ -119,7 +135,7 @@ def summary_line(entries: dict) -> str | None:
         return None
     parts = []
     for name, keys in (("duplicate", ("duplicate",)),
-                       ("fact", ("conflict", "fact_decay", "review", "new_fact", "promotion", "confirm", "trust_feedback")),
+                       ("fact", ("conflict", "outcome", "fact_decay", "review", "new_fact", "promotion", "confirm", "trust_feedback")),
                        ("note", ("note_decay",))):
         n = sum(kinds.get(k, 0) for k in keys)
         if n:
