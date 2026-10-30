@@ -163,3 +163,47 @@ def test_cleanup_touches_only_our_own_leftovers(world):
     ours.write_text("{", encoding="utf-8")
     run.run(world.homes, out=io.StringIO())
     assert stranger.exists() and not ours.exists()
+
+
+class _GoneReader(io.StringIO):
+    """The stdout of a reader that went away: Windows says EINVAL, POSIX EPIPE."""
+
+    def __init__(self, fail_on: str):
+        super().__init__()
+        self.fail_on = fail_on
+
+    def write(self, s):
+        if self.fail_on == "write":
+            raise OSError(22, "Invalid argument")
+        return super().write(s)
+
+    def flush(self):
+        if self.fail_on == "flush":
+            raise OSError(22, "Invalid argument")
+
+
+@pytest.mark.parametrize("fail_on", ["write", "flush"])
+def test_a_hook_whose_reader_is_gone_ends_quietly(world, fail_on):
+    world.fact("Магазин закрывается в девять вечера по пятницам", origin="inferred", days_old=2)
+    run.run(world.homes, out=io.StringIO())
+    assert hooks.session_start(world.homes, "claude-code", out=_GoneReader(fail_on)) == 0
+    assert hooks.session_start(world.homes, "codex", background=True, out=_GoneReader(fail_on)) == 0
+    out = io.StringIO()  # nobody saw the line: the next session still gets it
+    hooks.session_start(world.homes, "claude-code", out=out)
+    assert "memory question" in out.getvalue()
+
+
+def test_the_hook_command_with_a_closed_stdout_exits_quietly(world):
+    """What happened live (2026-10-31): the reading end of the hook's stdout closed — a traceback and exit 1."""
+    import os
+    import subprocess
+    import sys
+
+    world.fact("Магазин закрывается в девять вечера по пятницам", origin="inferred", days_old=2)
+    run.run(world.homes, out=io.StringIO())
+    proc = subprocess.Popen([sys.executable, "-m", "dreamem", "hook", "session-start", "--client", "claude-code"],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={**os.environ, **world.env})
+    proc.stdout.close()  # the reader is gone before the hook writes
+    err = proc.stderr.read().decode("utf-8", "replace")
+    proc.wait(60)
+    assert proc.returncode == 0 and "Traceback" not in err and "Exception ignored" not in err, err

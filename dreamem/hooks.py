@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 
 from . import config, report, run
@@ -55,11 +56,28 @@ def _ask_time(homes: Homes) -> bool:
     return True
 
 
-def session_start(homes: Homes, client: str, *, background: bool = False, out=sys.stdout) -> int:
+def _say(out, text: str) -> bool:
+    """Print the hook's one answer. A reader that went away (Windows: EINVAL, POSIX: EPIPE) ends the hook quietly: the
+    rest of the process's output goes to the null device, so the interpreter's own flush at exit cannot fail either."""
+    try:
+        out.write(text)
+        out.flush()
+        return True
+    except (OSError, ValueError):
+        if out is sys.stdout:
+            try:
+                os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+            except (OSError, ValueError):
+                pass
+        return False
+
+
+def session_start(homes: Homes, client: str, *, background: bool = False, out=None) -> int:
+    out = out or sys.stdout  # looked up per call: a default bound at import time outlives a replaced stdout
     try:
         if background:
             run.run(homes, if_due=True, out=io.StringIO())
-            out.write("{}\n")
+            _say(out, "{}\n")
             return 0
         summary = read_json(homes.summary, {}) or {}
         night = newest_night(summary)
@@ -72,16 +90,15 @@ def session_start(homes: Homes, client: str, *, background: bool = False, out=sy
         except Exception:  # noqa: BLE001 - not recorded, not asked: the limits hold
             ask = False
         if not line and not ask:
-            out.write("{}\n")
+            _say(out, "{}\n")
             return 0
     except Exception:  # noqa: BLE001 - a hook must never break a session
-        out.write("{}\n")
+        _say(out, "{}\n")
         return 0
     text = "\n\n".join(t for t in (line, ASK_TIME if ask else None) if t)
-    out.write(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}},
-                         ensure_ascii=False) + "\n")
-    out.flush()
-    if not line:
+    said = _say(out, json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}},
+                                ensure_ascii=False) + "\n")
+    if not line or not said:  # nobody read the line: the next session shows it
         return 0
     try:  # bookkeeping after the one answer: whatever fails here prints nothing more
         lock = Lock(homes.lock, wait=0.5)
