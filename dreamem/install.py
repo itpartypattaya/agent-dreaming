@@ -80,18 +80,52 @@ def codex_block() -> str:
     return "\n".join(lines) + "\n"
 
 
+def _foreign(inner: str) -> str:
+    """What is not ours between the marks. Codex appends a new table at the end of its file — inside our block, before
+    its end mark (``[tui] screen_reader_detection_done = true``, seen live): kept, never removed with the block. Ours is
+    each ``[[hooks.SessionStart.hooks]]`` table running ``dreamem hook session-start`` and the empty
+    ``[[hooks.SessionStart]]`` header before it, whatever Python path an older install wrote."""
+    chunks: list[list[str]] = [[]]
+    for line in inner.splitlines():
+        if line.lstrip().startswith("["):
+            chunks.append([])
+        chunks[-1].append(line)
+    def header(chunk: list[str]) -> str:
+        """The table a header names, as TOML reads it: no trailing comment, no spaces (Codex review of PR #4)."""
+        return "".join(chunk[0].split("#", 1)[0].split()) if chunk else ""
+
+    ours = [header(c) == "[[hooks.SessionStart.hooks]]" and
+            any("dreamem hook session-start" in line for line in c) for c in chunks]
+    for i, c in enumerate(chunks):
+        if (header(c) == "[[hooks.SessionStart]]" and not any(line.strip() for line in c[1:])
+                and i + 1 < len(chunks) and ours[i + 1]):
+            ours[i] = True
+    kept = "\n".join(line for c, mine in zip(chunks, ours, strict=True) if not mine for line in c)
+    return kept.strip("\n")
+
+
 def codex_text(current: str, *, remove: bool = False) -> str:
     text = current
     start = text.find(MARK_BEGIN)
+    foreign = ""
     if start != -1:
         end = text.find(MARK_END, start)
+        inner_end = len(text) if end == -1 else end
+        foreign = _foreign(text[start + len(MARK_BEGIN):inner_end])
         end = len(text) if end == -1 else end + len(MARK_END)
         head, tail = text[:start].rstrip("\n"), text[end:].lstrip("\n")
-        text = (head + "\n" + tail) if head.strip() else tail
-        if head.strip() and not tail:
-            text = head + "\n"
+        rest = "\n\n".join(p for p in (foreign, tail.rstrip("\n")) if p)
+        if remove:
+            text = "\n\n".join(p for p in (head, rest) if p.strip())
+            return text + "\n" if text.strip() else ""
+        text = head + ("\n" if head.strip() else "")
+        tail = rest
+    else:
+        tail = ""
     if not remove:
         text = (text.rstrip("\n") + "\n\n" if text.strip() else "") + codex_block()
+        if tail:
+            text += "\n" + tail.rstrip("\n") + "\n"
     return text
 
 
