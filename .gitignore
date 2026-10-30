@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+# Working notes kept private, as in hermes-dreaming: the agent's rules, the hand-over log, plans
+CLAUDE.md
+HANDOFF.md
+plans/

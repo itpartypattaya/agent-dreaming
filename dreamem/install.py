@@ -1,0 +1,223 @@
+"""``dreamem install claude-code | codex | schedule [--dry-run] [--uninstall]``.
+
+Claude Code: the plugin is the one way in (``/agent-dreaming:dream`` and its two hooks come with it); this command
+prints — or runs, with ``--run`` — the two ``claude plugin`` commands. Nothing is written into settings by hand, so the
+hooks cannot be registered twice.
+
+Codex CLI: one marked block at the end of ``~/.codex/config.toml`` with the two SessionStart hooks, and the skill
+``dreaming`` in ``~/.agents/skills/dreaming/`` (``$dreaming``). A file is backed up next to itself before it changes,
+the new TOML must parse, ``--dry-run`` shows the diff and writes nothing, ``--uninstall`` removes exactly what was
+added. Codex runs a hook only once it is trusted: open ``/hooks`` in Codex and trust the two.
+
+Schedule (optional): a daily run at 04:00 that catches up after sleep — Task Scheduler on Windows (``StartWhenAvailable``),
+launchd on macOS, a systemd user timer with ``Persistent=true`` on Linux. ``--dry-run`` prints it.
+"""
+from __future__ import annotations
+
+import difflib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import tomllib
+from importlib import resources
+from pathlib import Path
+
+from .paths import Homes
+
+MARK_BEGIN = "# >>> agent-dreaming (dreamem install codex) >>>"
+MARK_END = "# <<< agent-dreaming <<<"
+MARKETPLACE = "itpartypattaya/agent-dreaming"
+PLUGIN = "agent-dreaming@agent-dreaming"
+TASK = "agent-dreaming"
+
+
+def python_path() -> str:
+    return Path(sys.executable).as_posix()
+
+
+def command(*args: str) -> str:
+    """For a POSIX-style shell (Git Bash on Windows): the interpreter quoted, forward slashes, ``-I``."""
+    return " ".join([f'"{python_path()}"', "-I", "-m", "dreamem", *args])
+
+
+def windows_command(*args: str) -> str:
+    """For PowerShell (Codex's ``command_windows``): a quoted path followed by arguments is a parse error there, so the
+    path goes bare, or after the call operator when it holds a space."""
+    python = str(Path(sys.executable))
+    head = f'& "{python}"' if " " in python else python
+    return " ".join([head, "-I", "-m", "dreamem", *args])
+
+
+def skill_text(name: str) -> str:
+    text = resources.files("dreamem").joinpath("skill/SKILL.md").read_text(encoding="utf-8")
+    return text.replace("name: dream\n", f"name: {name}\n", 1)
+
+
+def _toml(value: str) -> str:
+    return json.dumps(value)
+
+
+def codex_block() -> str:
+    lines = [MARK_BEGIN]
+    for extra, label, timeout, background in (([], "dreaming: last night", 10, False),
+                                              (["--async"], "dreaming: tonight's pass", 600, True)):
+        args = ["hook", "session-start", "--client", "codex", *extra]
+        lines += ["[[hooks.SessionStart]]", "[[hooks.SessionStart.hooks]]", 'type = "command"',
+                  f"command = {_toml(command(*args))}", f"command_windows = {_toml(windows_command(*args))}",
+                  f"timeout = {timeout}", f"statusMessage = {_toml(label)}"]
+        if background:
+            lines.append("async = true")
+        lines.append("")
+    lines.append(MARK_END)
+    return "\n".join(lines) + "\n"
+
+
+def codex_text(current: str, *, remove: bool = False) -> str:
+    text = current
+    start = text.find(MARK_BEGIN)
+    if start != -1:
+        end = text.find(MARK_END, start)
+        end = len(text) if end == -1 else end + len(MARK_END)
+        head, tail = text[:start].rstrip("\n"), text[end:].lstrip("\n")
+        text = (head + "\n" + tail) if head.strip() else tail
+        if head.strip() and not tail:
+            text = head + "\n"
+    if not remove:
+        text = (text.rstrip("\n") + "\n\n" if text.strip() else "") + codex_block()
+    return text
+
+
+def _diff(path: Path, old: str, new: str) -> str:
+    return "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True), str(path), str(path)))
+
+
+def _write(path: Path, old: str, new: str, dry_run: bool, out) -> bool:
+    diff = _diff(path, old, new)
+    if not diff:
+        print(f"{path}: no change", file=out)
+        return False
+    print(diff, file=out)
+    if dry_run:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        backup = path.with_name(f"{path.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}")
+        shutil.copy2(path, backup)
+        print(f"backup: {backup}", file=out)
+    path.write_text(new, encoding="utf-8", newline="\n")
+    return True
+
+
+def install_codex(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdout) -> int:
+    path = homes.codex / "config.toml"
+    old = path.read_text(encoding="utf-8") if path.exists() else ""
+    new = codex_text(old, remove=remove)
+    try:
+        tomllib.loads(new)
+    except tomllib.TOMLDecodeError as exc:
+        print(f"{path}: the result would not parse ({exc}); nothing was changed", file=out)
+        return 1
+    written = _write(path, old, new, dry_run, out)
+    skill = Path.home() / ".agents" / "skills" / "dreaming" / "SKILL.md"
+    if remove:
+        if skill.exists() and not dry_run:
+            shutil.rmtree(skill.parent)
+        print(f"{'would remove' if dry_run else 'removed'}: {skill.parent}", file=out)
+    else:
+        old_skill = skill.read_text(encoding="utf-8") if skill.exists() else ""
+        _write(skill, old_skill, skill_text("dreaming"), dry_run, out)
+    if written and not remove:
+        print("Codex runs a hook only once it is trusted: open /hooks in Codex and trust the two dreaming hooks.",
+              file=out)
+    return 0
+
+
+def install_claude(*, remove: bool, dry_run: bool, run_it: bool, out=sys.stdout) -> int:
+    cmds = ([["claude", "plugin", "uninstall", PLUGIN]] if remove else
+            [["claude", "plugin", "marketplace", "add", MARKETPLACE], ["claude", "plugin", "install", PLUGIN]])
+    cli = shutil.which("claude")
+    for cmd in cmds:
+        shown = " ".join(cmd)
+        if dry_run or not run_it or not cli:
+            print(("run: " if cli else "run (claude not on PATH here): ") + shown, file=out)
+            continue
+        result = subprocess.run([cli, *cmd[1:]], capture_output=True, text=True, timeout=120)
+        print(f"{'ran' if result.returncode == 0 else 'failed'}: {shown}", file=out)
+        if result.returncode != 0:
+            print((result.stderr or result.stdout).strip()[-500:], file=out)
+            return 1
+    if not remove:
+        print("The plugin calls `dreamem` from PATH: install it with `uv tool install "
+              "git+https://github.com/itpartypattaya/agent-dreaming`.", file=out)
+    return 0
+
+
+def schedule_spec(platform: str | None = None) -> tuple[str, str]:
+    """(file name, content) of the daily job for this platform."""
+    platform = platform or sys.platform
+    if platform == "win32":
+        python = str(Path(sys.executable))
+        return (f"{TASK}.xml", f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>agent-dreaming: the nightly memory review (read-only)</Description></RegistrationInfo>
+  <Triggers><CalendarTrigger><StartBoundary>2026-01-01T04:00:00</StartBoundary><Enabled>true</Enabled>
+    <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay></CalendarTrigger></Triggers>
+  <Settings><StartWhenAvailable>true</StartWhenAvailable><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><ExecutionTimeLimit>PT30M</ExecutionTimeLimit>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy></Settings>
+  <Actions><Exec><Command>{python}</Command><Arguments>-I -m dreamem run --if-due</Arguments></Exec></Actions>
+</Task>
+""")
+    if platform == "darwin":
+        return ("com.agent-dreaming.plist", f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.agent-dreaming</string>
+  <key>ProgramArguments</key><array><string>{python_path()}</string><string>-I</string><string>-m</string>
+    <string>dreamem</string><string>run</string><string>--if-due</string></array>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>0</integer></dict>
+</dict></plist>
+""")
+    return ("agent-dreaming.service + agent-dreaming.timer", f"""# ~/.config/systemd/user/agent-dreaming.service
+[Unit]
+Description=agent-dreaming nightly memory review (read-only)
+[Service]
+Type=oneshot
+ExecStart={python_path()} -I -m dreamem run --if-due
+
+# ~/.config/systemd/user/agent-dreaming.timer
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+[Install]
+WantedBy=timers.target
+""")
+
+
+def install_schedule(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdout) -> int:
+    name, content = schedule_spec()
+    if sys.platform != "win32":
+        print(f"{name}:\n{content}", file=out)
+        print("Put these files in place and enable them yourself (launchctl load / systemctl --user enable --now "
+              "agent-dreaming.timer); this command writes them only on Windows.", file=out)
+        return 0
+    if remove:
+        cmd = ["schtasks", "/Delete", "/TN", TASK, "/F"]
+    else:
+        xml = homes.dreaming / name
+        if not dry_run:
+            homes.dreaming.mkdir(parents=True, exist_ok=True)
+            xml.write_text(content, encoding="utf-16")
+        cmd = ["schtasks", "/Create", "/TN", TASK, "/XML", str(xml), "/F"]
+    print(("would run: " if dry_run else "run: ") + " ".join(cmd), file=out)
+    if dry_run:
+        if not remove:
+            print(content, file=out)
+        return 0
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60,
+                            encoding=os.device_encoding(1) or "utf-8", errors="replace")
+    print((result.stdout or result.stderr).strip(), file=out)
+    return 0 if result.returncode == 0 else 1

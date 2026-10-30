@@ -1,0 +1,22 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "dreamem hook session-start --client claude-code",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "dreamem hook session-start --client claude-code --async",
+            "async": true,
+            "timeout": 600
+          }
+        ]
+      }
+    ]
+  }
+}
