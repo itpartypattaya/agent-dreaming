@@ -80,7 +80,8 @@ def test_hook_never_breaks_a_session(world, monkeypatch):
     world.homes.summary.write_text("{ not json", encoding="utf-8")
     out = io.StringIO()
     assert hooks.session_start(world.homes, "claude-code", out=out) == 0
-    assert json.loads(out.getvalue()) == {}
+    # A broken summary reads as a fresh install: no night to show (the time question may come, as after install).
+    assert "memory question" not in json.dumps(json.loads(out.getvalue()))
 
     def boom(*a, **k):
         raise RuntimeError("disk on fire")

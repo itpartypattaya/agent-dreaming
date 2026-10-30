@@ -54,13 +54,22 @@ dreamem run --dry-run        # see what it would ask, keep nothing
 dreamem install codex
 ```
 
-**Optional schedule** — a daily run that catches up after sleep (Task Scheduler / launchd / systemd timer):
+**When the pass runs** is yours to choose — your computer may be off at night, or you may use the agent by day only:
+
+```bash
+dreamem config time 23:00    # the first session after 23:00 runs it (local time)
+dreamem config time any      # the first session of each day
+```
+
+Until you choose, your agent asks you once in a session (on three days at most), and `dreamem install codex` asks in
+the terminal. The pass itself runs in the background at a session start; nothing runs while no agent is open.
+
+**Optional schedule** — a daily run at that time (04:00 if none) that catches up after sleep (Task Scheduler / launchd /
+systemd timer); run it again after changing the time:
 
 ```bash
 dreamem install schedule --dry-run
 ```
-
-Without it, the first session of the day runs the pass in the background ("lazy night").
 
 ## What it reads, writes, and never does
 
@@ -80,6 +89,7 @@ dreamem show                            open questions (for the review)
 dreamem decide Q3 yes|no|… [--text T]   record an answer; prints the memory call to make
 dreamem applied Q3 | failed Q3 | undo Q3
 dreamem list | status | forget-sweep
+dreamem config time [HH:MM|any]         when the pass runs
 dreamem install claude-code|codex|schedule [--dry-run] [--uninstall]
 ```
 
@@ -90,6 +100,7 @@ dreamem install claude-code|codex|schedule [--dry-run] [--uninstall]
 ```toml
 clients = ["claude-code", "codex"]
 timezone = "auto"            # the machine's offset; or an IANA name
+dream_time = "23:00"         # when the pass runs: HH:MM, or "any" (first session of the day)
 max_questions = 7            # per night; the rest wait
 max_message_chars = 2000     # longer turns are pasted documents, not your words
 exclude_patterns = []        # regexes of text that must never count as yours

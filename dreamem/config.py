@@ -14,6 +14,7 @@ A profile is one pass: one fact store and the messages that may corroborate its 
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import sys
@@ -22,6 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from .fsutil import write_private
 from .paths import Homes
 
 DEFAULTS = {
@@ -35,8 +37,14 @@ DEFAULTS = {
     "exclude_patterns": [],
     "agent_names": ["claude", "codex"],
     "fact_source": "auto",  # auto | holographic | none
+    # When the night's pass runs: "HH:MM" local time — the first session after it; "any" — the first session of each
+    # day; "" — not chosen yet (as "any", and the agent asks the person once).
+    "dream_time": "",
 }
+ANY_TIME = "any"
 _SAFE = re.compile(r"[^A-Za-z0-9_.-]")
+_TIME = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
+_TOP_KEY = re.compile(r"^\s*dream_time\s*=")
 
 
 def _merge(base: dict, over: dict) -> dict:
@@ -54,7 +62,46 @@ def load(homes: Homes) -> tuple[dict, list[str]]:
     except (OSError, ValueError) as exc:  # TOMLDecodeError and UnicodeDecodeError are ValueErrors
         return dict(DEFAULTS), [f"{homes.config}: {type(exc).__name__} — defaults used"]
     unknown = sorted(set(raw) - set(DEFAULTS))
-    return _merge(DEFAULTS, {k: v for k, v in raw.items() if k in DEFAULTS}), [f"unknown setting: {k}" for k in unknown]
+    settings = _merge(DEFAULTS, {k: v for k, v in raw.items() if k in DEFAULTS})
+    problems = [f"unknown setting: {k}" for k in unknown]
+    chosen = settings.get("dream_time")
+    if chosen not in ("", ANY_TIME) and dream_time(chosen) is None:
+        problems.append(f"dream_time {chosen!r} is not HH:MM or {ANY_TIME!r} — the first session of each day is used")
+        settings["dream_time"] = ANY_TIME
+    return settings, problems
+
+
+def dream_time(value) -> tuple[int, int] | None:
+    """(hour, minute) of an ``HH:MM`` setting, None for anything else."""
+    m = _TIME.match(value.strip()) if isinstance(value, str) else None
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def set_time(homes: Homes, value: str) -> str:
+    """Write ``dream_time`` into our settings — that one top-level line, the rest of the file as it was. ``HH:MM`` (as
+    ``09:05``) or ``any``. A wrong value, or a file that cannot be read back as TOML, raises ValueError and nothing is
+    written. Returns the value kept."""
+    value = value.strip().lower()
+    hm = dream_time(value)
+    if hm is None and value != ANY_TIME:
+        raise ValueError(f"{value!r}: a time is HH:MM (24-hour, e.g. 23:00), or {ANY_TIME!r}")
+    kept = f"{hm[0]:02d}:{hm[1]:02d}" if hm else ANY_TIME
+    try:
+        text = homes.config.read_bytes().decode("utf-8") if homes.config.exists() else ""
+        tomllib.loads(text)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"{homes.config} cannot be read ({type(exc).__name__}); fix it first, nothing was written") from exc
+    lines = text.splitlines()
+    table = next((i for i, line in enumerate(lines) if line.lstrip().startswith("[")), len(lines))
+    head = [line for line in lines[:table] if not _TOP_KEY.match(line)]
+    while head and not head[-1].strip():
+        head.pop()
+    new = head + [f"dream_time = {json.dumps(kept)}"] + ([""] + lines[table:] if table < len(lines) else [])
+    out = "\n".join(new) + "\n"
+    if tomllib.loads(out).get("dream_time") != kept:
+        raise ValueError(f"{homes.config}: the setting would not read back; nothing was written")
+    write_private(homes.config, out)
+    return kept
 
 
 def timezone_name(setting: str) -> str:

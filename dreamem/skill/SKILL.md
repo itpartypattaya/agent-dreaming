@@ -70,5 +70,6 @@ but no call can be made — tell the person the store is not connected here and 
 
 `dreamem show` · `dreamem decide <Q> <answer> [--text T]` · `dreamem applied <Q>` · `dreamem failed <Q> --reason R` ·
 `dreamem undo <Q>` · `dreamem list` · `dreamem run` · `dreamem status` · `dreamem forget-sweep` (after a `memory_forget`:
-removes the fact from the dream's own copies). With several profiles (per-project stores) add `--profile <name>` when
+removes the fact from the dream's own copies) · `dreamem config time HH:MM|any` (when the pass runs; the person's
+choice, never yours). With several profiles (per-project stores) add `--profile <name>` when
 a command asks for it.
