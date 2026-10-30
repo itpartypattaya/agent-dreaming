@@ -80,6 +80,11 @@ def codex_block() -> str:
     return "\n".join(lines) + "\n"
 
 
+def _hooks(block: str) -> str:
+    """Our hook groups of a block, without its marks: what Codex hashes for its trust."""
+    return block[len(MARK_BEGIN) + 1:block.rindex(MARK_END)]
+
+
 def _foreign(inner: str) -> str:
     """What is not ours between the marks. Codex appends a new table at the end of its file — inside our block, before
     its end mark (``[tui] screen_reader_detection_done = true``, seen live): kept, never removed with the block. Ours is
@@ -154,8 +159,26 @@ TIME_QUESTION = ("What time of day suits the nightly pass? A time when this comp
                  "(HH:MM, 24-hour; Enter: the first session of each day): ")
 
 
+def _terminal() -> bool:
+    """A person at a console on the other end of stdin. ``isatty()`` alone is not enough on Windows: the NUL device
+    (``< /dev/null``, ``stdin=DEVNULL``) is a character device and says True; only a console has a console mode."""
+    try:
+        if not (sys.stdin and sys.stdin.isatty()):
+            return False
+        if sys.platform != "win32":
+            return True
+        import ctypes
+        import msvcrt
+
+        mode = ctypes.c_uint32()
+        handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+        return bool(ctypes.windll.kernel32.GetConsoleMode(ctypes.c_void_p(handle), ctypes.byref(mode)))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 def _interactive(question: str) -> str:
-    if not (sys.stdin and sys.stdin.isatty()):
+    if not _terminal():
         raise EOFError  # not a terminal: the agent asks in the first session instead
     return input(question)
 
@@ -205,7 +228,8 @@ def install_codex(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdout, 
         _write(skill, old_skill, skill_text("dreaming"), dry_run, out)
     if not remove and not dry_run:
         ask_time(homes, prompt, out)
-    if written and not remove:
+    if written and not remove and _hooks(codex_block()) not in old:
+        # Trust is kept per hook by the hash of its definition: only new or rewritten hooks need it again.
         print("Codex runs a hook only once it is trusted: open /hooks in Codex and trust the two dreaming hooks.",
               file=out)
     return 0

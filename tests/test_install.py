@@ -138,3 +138,40 @@ def test_our_hooks_are_known_with_a_comment_or_spaces_in_the_header():
     assert len(tomllib.loads(again)["hooks"]["SessionStart"]) == 2
     removed = install.codex_text(edited, remove=True)
     assert "dreamem" not in removed and "hooks" not in tomllib.loads(removed)
+
+
+def test_no_time_question_without_a_terminal(tmp_path):
+    """Seen live: `dreamem install codex < /dev/null` printed the time question — on Windows the NUL device says
+    isatty() == True. Without a person at a terminal nothing is asked (the agent asks in a session instead)."""
+    import os
+    import subprocess
+    import sys
+
+    env = {**os.environ, "USERPROFILE": str(tmp_path), "HOME": str(tmp_path),
+           "CODEX_HOME": str(tmp_path / ".codex"), "DREAMEM_HOME": str(tmp_path / ".dreaming")}
+    proc = subprocess.run([sys.executable, "-m", "dreamem", "install", "codex"], stdin=subprocess.DEVNULL,
+                          capture_output=True, text=True, encoding="utf-8", env=env, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert "What time of day" not in proc.stdout
+
+
+def test_the_trust_reminder_only_when_our_hooks_change(tmp_path, monkeypatch):
+    """Seen live: the reminder to trust the hooks came when only a setting of Codex was moved out of our block — the
+    hooks were unchanged and trusted already."""
+    from dreamem.paths import homes
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    h = homes({"CODEX_HOME": str(tmp_path / ".codex"), "DREAMEM_HOME": str(tmp_path / ".dreaming")})
+    first = io.StringIO()
+    install.install_codex(h, remove=False, dry_run=False, out=first, prompt=lambda q: "any")
+    assert "/hooks" in first.getvalue()
+    cfg = tmp_path / ".codex" / "config.toml"
+    cfg.write_text(_codex_appended(cfg.read_text(encoding="utf-8"), "[tui]\nalt_screen = false\n"), encoding="utf-8")
+    second = io.StringIO()
+    install.install_codex(h, remove=False, dry_run=False, out=second)
+    assert "backup" in second.getvalue()  # the file did change
+    assert "/hooks" not in second.getvalue()
+    cfg.write_text(cfg.read_text(encoding="utf-8").replace("timeout = 10", "timeout = 5"), encoding="utf-8")
+    third = io.StringIO()
+    install.install_codex(h, remove=False, dry_run=False, out=third)
+    assert "/hooks" in third.getvalue()  # a hook was rewritten: its trust is gone, say so
