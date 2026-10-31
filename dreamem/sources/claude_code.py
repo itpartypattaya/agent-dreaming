@@ -169,10 +169,10 @@ def _load_cache(cache: Path | None) -> dict:
 
 def read(projects: Path, since: float, now: float | None = None,
          cache: Path | None = None, only: set[str] | None = None,
-         boundary: tuple | None = None) -> tuple[list[Message], Coverage]:
+         boundary: tuple | None = None, keep: bool = True) -> tuple[list[Message], Coverage]:
     """*only*: the session files to read (``<project>/<session>.jsonl``), every one when None — read whatever their
     mtime. *boundary*: a version seen writing turnOrigin elsewhere (a message read again alone keeps the evidence
-    that made its line count)."""
+    that made its line count). *keep*: False reads the cache but leaves it as it was (a dry run keeps nothing)."""
     cov = Coverage(CLIENT)
     if not projects.is_dir():
         cov.note("not_used")  # nothing to read is not a gap
@@ -291,7 +291,7 @@ def read(projects: Path, since: float, now: float | None = None,
         else:
             cov.count(UNKNOWN)
     cov.messages = len(out)
-    if cache is not None:
+    if cache is not None and keep:
         try:
             write_private(cache, json.dumps({"v": CACHE_VERSION, "files": remembered}, separators=(",", ":")))
         except OSError:

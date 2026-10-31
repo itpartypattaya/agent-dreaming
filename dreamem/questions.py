@@ -423,7 +423,7 @@ def decide(q: dict, answer: str, text: str | None = None) -> dict:
         return todo
     if call["tool"] != "memory_merge" and q.get("version_id") is not None:
         # The store refuses the write when the fact is no longer at the version shown (holographic-memory 0.5.0+;
-        # an older one ignores the argument, so the skill makes no call through a tool without it).
+        # an older one ignores the argument and writes unchecked).
         call["args"]["expect"] = {str(q.get("fact_id")): q["version_id"]}
     return {**todo, "call": call, "check": {"database": q.get("store")}}
 

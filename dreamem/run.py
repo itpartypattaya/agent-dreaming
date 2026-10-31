@@ -82,14 +82,16 @@ class _Projects:
         return out
 
 
-def gather(homes: Homes, settings: dict, now: float) -> dict:
-    """Everything a night reads, screened, with the coverage of each source."""
+def gather(homes: Homes, settings: dict, now: float, *, keep: bool = True) -> dict:
+    """Everything a night reads, screened, with the coverage of each source. *keep*: False (a dry run) reads the
+    position cache but leaves it as it was."""
     days = int((settings.get("windows") or {}).get("corroboration_days", 30))
     since = now - days * 86400
     msgs, coverage = [], {}
     clients = settings.get("clients") or []
     if "claude-code" in clients:
-        got, cov = src_claude.read(homes.claude_projects, since, now, cache=homes.dreaming / CLAUDE_CACHE)
+        got, cov = src_claude.read(homes.claude_projects, since, now, cache=homes.dreaming / CLAUDE_CACHE,
+                                   keep=keep)
         msgs += got
         coverage["claude-code"] = cov.as_dict()
     if "codex" in clients:
@@ -224,7 +226,7 @@ def run(homes: Homes, *, if_due: bool = False, dry_run: bool = False, only: list
         shutil.rmtree(homes.dreaming / "lock.d", ignore_errors=True)  # 0.1.0's lock directory
         now = time.time()
         tz = config.timezone_name(settings.get("timezone", "auto"))
-        data = gather(homes, settings, now)
+        data = gather(homes, settings, now, keep=not dry_run)
         # The key of the candidates' digests: this install's own; a dry run keeps nothing, not even a key.
         data["salt"] = secrets.token_bytes(32) if dry_run else candidates.salt(homes)
         summary = read_json(homes.summary, {}) or {}

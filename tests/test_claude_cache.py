@@ -156,3 +156,36 @@ def test_the_cache_holds_no_words(world, tmp_path):
     assert [m.text for m in msgs] == [SECRET]
     raw = cache.read_bytes()
     assert SECRET.encode() not in raw and "склад".encode() not in raw and "склад".encode("unicode_escape") not in raw
+
+
+# `dreamem run --dry-run` promises to keep nothing: a preview leaves ~/.dreaming exactly as it found it — no cache on a
+# fresh home, and an existing cache not rewritten even when the transcripts grew since.
+def test_a_dry_run_keeps_no_cache(world):
+    import io
+
+    from dreamem import run
+
+    world.say({2: ["Поставщик привозит зерно по вторникам"]}, session="t1")
+    assert run.run(world.homes, dry_run=True, out=io.StringIO()) == 0
+    assert not (world.homes.dreaming / run.CLAUDE_CACHE).exists()
+
+
+def test_a_dry_run_leaves_the_cache_of_the_last_night(world):
+    import io
+
+    from dreamem import run
+
+    world.say({2: ["Поставщик привозит зерно по вторникам"]}, session="t1")
+    assert run.run(world.homes, out=io.StringIO()) == 0
+    cache = world.homes.dreaming / run.CLAUDE_CACHE
+    assert cache.exists()
+    world.say({1: ["Склад открывается в восемь утра"]}, session="t2")
+    # The lock is not the night's: every command takes it (a dry run too, so it never races a real pass) and stamps
+    # its pid and start time in it, for a person reading the file.
+    lock = str(world.homes.lock.relative_to(world.root))
+    before = world.tree(world.homes.dreaming)
+    before.pop(lock)
+    assert run.run(world.homes, dry_run=True, out=io.StringIO()) == 0
+    after = world.tree(world.homes.dreaming)
+    after.pop(lock)
+    assert after == before
