@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.3 — 2026-10-31
+
+- The pass no longer counts recurring themes of the person's messages: nothing asked about them and they were not
+  kept, yet counting them took close to half of a pass. On a real home (2 500 messages, 36 facts) a pass with the
+  transcript cache warm went from 16.5 s to 9.0 s; the questions are the same. The engine keeps the count behind a
+  `themes` setting, on by default.
+
 ## 0.4.2 — 2026-10-31
 
 - The review needs holographic-memory 0.5.0 or newer for its memory calls. 0.4.1 fell back to checking the version

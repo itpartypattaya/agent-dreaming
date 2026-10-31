@@ -392,7 +392,8 @@ the dream.
   `gates.md_ask_cooldown_days`; entries with a pin marker are skipped; only
   the published slice (`gates.publish_cap`) is marked as asked.
 - **emerging_themes** — frequent tokens of the window not present in facts or
-  memory. Never in the prompt (noise), only in the full JSON.
+  memory. Never in the prompt (noise), only in the full JSON. `themes: false`
+  skips the count (empty list, `stats.themes` 0); dreamem sets it.
 - **ephemeral_events** — dated tests/deadlines that passed scoring but are
   filtered out of promotions. **Expired events are dropped before the split
   into sections** (dates in words in Russian, English, German, Spanish, French,
