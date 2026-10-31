@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Ready for the Claude plugin directory: `plugin.json` names its icon (`icon`; a test checks the file is in the
+  plugin). The review skill says what to do when the `dreamem` program is missing (the directory installs the plugin
+  alone): the install command, and that it works only where the agent runs commands on the person's computer, not in
+  the claude.ai chat or Cowork. README: a table of example requests and a section "When something does not work".
+
 ## 0.6.0 — 2026-10-31
 
 - Memory systems behind one seam (`dreamem/providers`): a system reads its store for the pass and says how an answer

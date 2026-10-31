@@ -9,6 +9,7 @@
   "homepage": "https://github.com/itpartypattaya/agent-dreaming",
   "repository": "https://github.com/itpartypattaya/agent-dreaming",
   "license": "MIT",
+  "icon": "./.claude-plugin/icon.png",
   "keywords": [
     "memory",
     "dreaming",
