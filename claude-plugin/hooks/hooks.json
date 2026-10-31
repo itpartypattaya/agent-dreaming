@@ -6,12 +6,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "dreamem hook session-start --client claude-code",
+            "command": "dreamem hook session-start --client claude-code || echo 'agent-dreaming: the dreamem program is not installed, so no nightly memory pass runs. Only if the person asks about dreaming or memory questions, tell them it is installed once with uv tool install git+https://github.com/itpartypattaya/agent-dreaming'",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "dreamem hook session-start --client claude-code --async",
+            "command": "dreamem hook session-start --client claude-code --async || echo '{}'",
             "async": true,
             "timeout": 600
           }

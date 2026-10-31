@@ -290,8 +290,8 @@ Details: [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md).
 
 ## When something does not work
 
-- **The review says `dreamem` is not found**, or a session-start hook error names `dreamem`: the
-  program is not installed or not on `PATH`. Install it as in [Install](#install); if `uv` says its tool folder is
+- **The agent says the `dreamem` program is not installed** (the plugin's session-start hook tells it so, and the
+  review stops there): the program is not installed or not on `PATH`. Install it as in [Install](#install); if `uv` says its tool folder is
   not on `PATH`, run `uv tool update-shell`. Then restart Claude Code: hooks see the `PATH` it started with.
 - **No summary line at the start of a session**: the line comes once a day and only for a finished night.
   `dreamem status` tells whether a pass is due, when it runs (`dream_time`) and how the last night went;
@@ -323,6 +323,9 @@ paste it.
 - An older holographic-memory (before 0.5.0) ignores `expect`: a change then goes through unchecked — update
   holographic-memory.
 - Possible new facts come from the last 30 days only, and the filter is tuned for Russian and English.
+- The plugin's hooks are one line for bash (macOS, Linux, Git Bash on Windows) and PowerShell 7. Claude Code on
+  Windows without Git Bash and without PowerShell 7 runs them in Windows PowerShell 5.1, which cannot read that line:
+  there the session starts with a hook error. Git for Windows or PowerShell 7 fixes it.
 
 ## Licence
 
