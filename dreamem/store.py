@@ -17,9 +17,10 @@ def _columns(conn, table: str) -> set[str]:
 
 
 def facts_state(path: Path | None, ids) -> dict[int, dict]:
-    """{fact_id: {version_id, content, origin}} of the current versions, id and text from one statement; origin as
-    the engine reads it (a confirmation turns an inference or an unknown origin into ``confirmed``). Empty when the
-    store is missing or older."""
+    """{fact_id: {version_id, content, origin, status}} of each fact's head version — the newest that is not a
+    correction, as holographic-memory checks ``expect`` against: ``current``, or ``ended`` for a fact that no longer
+    holds — id and text from one statement; origin as the engine reads it (a confirmation turns an inference or an
+    unknown origin into ``confirmed``). Empty when the store is missing or older."""
     ids = sorted({int(i) for i in ids if str(i).isdigit()})
     if path is None or not ids or not Path(path).exists():
         return {}
@@ -31,13 +32,16 @@ def facts_state(path: Path | None, ids) -> dict[int, dict]:
             return {}
         marks = ",".join("?" * len(ids))
         origin = "src_origin" if "src_origin" in cols else "null"
-        for fid, vid, text, org in conn.execute(
-                f"select fact_id, version_id, content, {origin} from fact_versions "
-                f"where status='current' and fact_id in ({marks})", ids):
-            out[int(fid)] = {"version_id": vid, "content": text, "origin": org if org in ORIGINS else None}
+        for fid, vid, text, org, status in conn.execute(
+                f"select fact_id, version_id, content, {origin}, status from fact_versions "
+                f"where status != 'corrected' and fact_id in ({marks}) order by fact_id, seq desc, version_id desc",
+                ids):
+            if int(fid) not in out:
+                out[int(fid)] = {"version_id": vid, "content": text, "origin": org if org in ORIGINS else None,
+                                 "status": status}
         if _columns(conn, "fact_confirmations"):
             for (fid,) in conn.execute(f"select distinct fact_id from fact_confirmations where fact_id in ({marks})", ids):
-                rec = out.setdefault(int(fid), {"version_id": None, "content": None, "origin": None})
+                rec = out.setdefault(int(fid), {"version_id": None, "content": None, "origin": None, "status": None})
                 if rec["origin"] in (None, "inferred"):
                     rec["origin"] = "confirmed"
     except sqlite3.Error:

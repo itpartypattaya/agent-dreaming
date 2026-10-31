@@ -131,3 +131,12 @@ def test_a_forgotten_fact_leaves_no_correction_behind(world):
     run.forget_sweep(world.homes, out=io.StringIO())
     for name in ("questions.json", "report.md"):
         assert "закрывается в десять" not in (world.homes.profile("global") / name).read_text(encoding="utf-8")
+
+
+def test_a_fact_ended_since_raises_nothing(world):
+    fid = world.fact(FRIDAY, origin="said", days_old=40)
+    world.outcome("corrected", "stale_version", emitted=[fid], named=[fid])
+    world.end(fid)
+    doc = night(world)
+    assert [q for q in doc["questions"] if q["section"] == "outcome"] == []
+    assert doc["skipped"].get("outcome:gone") == 1

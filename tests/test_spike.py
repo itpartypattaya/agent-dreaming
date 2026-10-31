@@ -282,8 +282,22 @@ def test_an_answer_names_the_store_and_the_version_shown(world):
     printed = []
     review.decide(world.homes, q["qid"], "outdated", out=printed.append)
     todo = json.loads(printed[0])
-    assert todo["call"] == {"tool": "memory_end", "args": {"fact_id": fid}}
+    # holographic-memory takes `expect` on every write (issue #2): the store itself refuses a fact changed since shown.
+    assert todo["call"] == {"tool": "memory_end", "args": {"fact_id": fid, "expect": {str(fid): world.version(fid)}}}
+    # The version stays in the check for a store older than `expect`, which the agent checks itself.
     assert todo["check"] == {"database": str(world.db), "version": {"fact_id": fid, "version_id": world.version(fid)}}
+
+
+@pytest.mark.parametrize("answer, tool", [("yes", "memory_feedback"), ("no", "memory_feedback"),
+                                          ("wrong", "memory_correct"), ("forget", "memory_forget"),
+                                          ("reject", "memory_feedback")])
+def test_every_write_carries_expect_of_the_version_shown(world, answer, tool):
+    fid = world.fact("Магазин закрывается в девять вечера по пятницам", origin="inferred", days_old=2)
+    q = next(q for q in night(world)["questions"] if q["fact_id"] == fid)
+    printed = []
+    review.decide(world.homes, q["qid"], answer, text="Магазин закрывается в десять", out=printed.append)
+    call = json.loads(printed[0])["call"]
+    assert call["tool"] == tool and call["args"]["expect"] == {str(fid): world.version(fid)}
 
 
 def test_merge_carries_expect_of_the_versions_shown(world):

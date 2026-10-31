@@ -123,6 +123,9 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
     def fact_q(section, item, **extra):
         fid = item.get("fact_id")
         state = facts.get(int(fid)) if str(fid).isdigit() else None
+        if state is not None and state.get("status") == "ended":
+            skip("ended_since")  # it no longer holds, by the person's own answer or an agent's: nothing to ask
+            return
         if state is not None and not _same_text(item, state.get("content")):
             # Changed by another session while the night ran: the version read now is not the text the night
             # judged. Asked about tomorrow, with the text and the version that go together.
@@ -144,7 +147,7 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
         state = facts.get(int(item["fact_id"]))
         if set(item["events"]) <= (answered or set()):
             skip("outcome:answered")
-        elif state is None or state.get("content") is None:
+        elif state is None or state.get("content") is None or state.get("status") == "ended":
             skip("outcome:gone")  # ended or forgotten since
         elif state.get("version_id") != item["version_id"]:
             skip("outcome:changed_since")  # changed after the answer went wrong: the problem is likely handled
@@ -357,7 +360,11 @@ def decide(q: dict, answer: str, text: str | None = None) -> dict:
         return todo
     check = {"database": q.get("store")}
     if call["tool"] != "memory_merge":
-        # Until holographic-memory takes `expect` on every write, the agent checks the version itself, right before.
+        # The store refuses the write when the fact is no longer at the version shown (holographic-memory issue #2).
+        # The version stays in the check too: a store older than `expect` refuses the argument, and then the agent
+        # checks the version itself right before the call.
+        if q.get("version_id") is not None:
+            call["args"]["expect"] = {str(q.get("fact_id")): q["version_id"]}
         check["version"] = {"fact_id": q.get("fact_id"), "version_id": q.get("version_id")}
     return {**todo, "call": call, "check": check}
 

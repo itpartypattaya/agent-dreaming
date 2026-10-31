@@ -88,6 +88,11 @@ class World:
                  (fid, content), db)
         self.sql("update facts set content=? where fact_id=?", (content, fid), db)
 
+    def end(self, fid, db=None):
+        """memory_end: the current version closed as `ended`; the fact's row stays (it held, until now)."""
+        self.sql("update fact_versions set status='ended', closed_at='2026-10-31' where fact_id=? and status='current'",
+                 (fid,), db)
+
     def outcome(self, outcome, reason, *, emitted=(), named=(), correction="", days_old=0.5, supersedes=None,
                 attempt=None, event=None, db=None):
         """An attempt (the facts a recall offered, at their current version) and the agent's outcome against it, as
