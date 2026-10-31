@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `dreamem run --dry-run` keeps nothing, as it says: it reads the transcript position cache (`claude-lines.json`) but
+  no longer rewrites it. Positions only, never words, but a preview should leave `~/.dreaming` as it found it.
+
 ## 0.5.0 — 2026-10-31
 
 - Possible new facts. The pass picks up to 10 clauses (`max_candidates`, newest first) where the person says something about
