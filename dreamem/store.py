@@ -51,6 +51,21 @@ def facts_state(path: Path | None, ids) -> dict[int, dict]:
     return out
 
 
+def current_texts(path: Path | None) -> list[str]:
+    """The text of every fact that holds now (its current version; a store without history: the facts table)."""
+    if path is None or not Path(path).exists():
+        return []
+    conn = connect(path)
+    try:
+        if _columns(conn, "fact_versions"):
+            return [r[0] for r in conn.execute("select content from fact_versions where status='current'")]
+        return [r[0] for r in conn.execute("select content from facts")]
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+
+
 def fact_text(path, fact_id) -> str | None:
     """The current text of *fact_id*, or None (no store, no such fact)."""
     if not path or not str(fact_id).isdigit() or not Path(path).exists():

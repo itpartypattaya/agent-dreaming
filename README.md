@@ -26,12 +26,19 @@ and only through the memory tools your agent already has.
 | An agent stored this, nobody confirmed | an agent's own conclusion | yes · no · outdated · wrong · forget · reject |
 | People keep saying it | you said it on three different days | yes · no |
 | A Claude Code note nobody mentioned lately | `memory/deploy.md` of an old project | keep · outdated (you edit the note yourself) |
+| Something you said that memory may not hold — a new fact? | «we live in Tbilisi with my husband Oleg» | save · no · never |
 
 Any question also takes **later**. An unanswered question comes back the next night; an answered one rests.
 
 Only **your** words count as evidence. Background tasks, scheduled jobs, subagents, `codex exec` scripts, slash
 commands, reminders and quotes of the agent are recognised and left out. A message holding a secret or an instruction
 to an agent is not read at all.
+
+New facts: the pass picks up to 10 clauses where you say something about yourself or your people that memory does
+not hold; your agent judges them first (lasting, yours, not in memory, worth asking) and asks you about one at most.
+Measured before release: on a blind synthetic persona 86 % of what the agent then asked about were real facts; on
+one real home, 7 of 7 (about two a week). The pass keeps no word of them — only which session and keyed digests —
+and the review reads the clause again from the session file.
 
 The journal question needs holographic-memory 0.4+ with `experience = true`. A report there is the agent's,
 not yours: it is asked only for a stale fact (not for a bad search or a wrong answer), once per report, and only
@@ -81,7 +88,7 @@ dreamem install schedule --dry-run
 | | |
 |---|---|
 | Reads | `~/.claude/projects/*/*.jsonl` (transcripts), `~/.claude/projects/*/memory/*.md` (auto-memory), `~/.codex/sessions/**` (`.jsonl` and `.jsonl.zst`), `~/.codex/memories*/`, `CLAUDE.md` / `AGENTS.md`, holographic-memory's database (read-only). Locations follow `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HOLOMEM_HOME`. |
-| Writes | only `~/.dreaming` (or `DREAMEM_HOME`): its state, the questions, `report.md`, and `claude-lines.json` — where in each transcript the lines that may be yours start and end, so the next pass does not read gigabytes of tool output again. Your messages are read in memory for the pass and stored nowhere — not even as snippets. |
+| Writes | only `~/.dreaming` (or `DREAMEM_HOME`): its state, the questions, `report.md`, `salt` (this install's key for the digests below), the digests of clauses you answered about (`candidates.json`), and `claude-lines.json` — where in each transcript the lines that may be yours start and end, so the next pass does not read gigabytes of tool output again. Your messages are read in memory for the pass and stored nowhere — not even as snippets. |
 | Never | writes to memory, transcripts, Claude or Codex settings; sends anything over the network; runs a model. Memory changes are made by your agent, in a session, on your answer. (SQLite itself may create the `-wal`/`-shm` files next to the holographic-memory database when it reads a database in WAL mode whose writer is not running, as any reader does; the database is never written.) |
 
 Details: [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md).
@@ -107,6 +114,7 @@ clients = ["claude-code", "codex"]
 timezone = "auto"            # the machine's offset; or an IANA name
 dream_time = "23:00"         # when the pass runs: HH:MM, or "any" (first session of the day)
 max_questions = 7            # per night; the rest wait
+max_candidates = 10          # possible new facts handed to the agent to judge per night; 0: none
 max_message_chars = 2000     # longer turns are pasted documents, not your words
 exclude_patterns = []        # regexes of text that must never count as yours
 fact_source = "auto"         # auto | holographic | none
@@ -117,8 +125,7 @@ corroboration_days = 30      # Claude Code keeps transcripts 30 days by default
 md_decay_days = 30
 ```
 
-Memory calls of the review need holographic-memory 0.5.0 or newer. Without holographic-memory the review works on
-Claude Code's memory notes alone. With holographic-memory in
+Without holographic-memory the review works on Claude Code's memory notes alone. With holographic-memory in
 `scope = "project"` each project's store is reviewed with that project's conversations only.
 
 ## Limits
@@ -127,9 +134,9 @@ Claude Code's memory notes alone. With holographic-memory in
   partial coverage; a night with partial coverage asks no "still relevant?" question.
 - A short quote you pasted and a sentence you typed look the same in a transcript.
 - Claude Code's memory notes and Codex memories are never edited by this tool (the review tells you which note to fix).
-- Every memory call of the review carries `expect`, the version the person was shown, and holographic-memory
-  refuses a fact changed since. That needs holographic-memory 0.5.0 or newer: an older one ignores `expect`, so with
-  it the review records answers but makes no memory call and asks you to update.
+- A memory call of the review that changes a fact carries `expect`, the version the person was shown, and
+  holographic-memory 0.5.0 or newer refuses a fact changed since. An older one ignores the argument: the write then
+  goes through unchecked — update holographic-memory.
 
 ## Licence
 

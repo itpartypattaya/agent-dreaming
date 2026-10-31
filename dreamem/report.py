@@ -17,6 +17,7 @@ SECTION_TITLE = {
     "confirm": "said again on different days — mark as confirmed?",
     "trust_feedback": "rejected earlier, still recalled — lower its trust?",
     "note_decay": "a Claude Code memory note nobody mentioned lately — still relevant?",
+    "new_candidate": "something the person said that memory may not hold — a new fact?",
 }
 
 
@@ -39,6 +40,8 @@ def question_text(q: dict) -> str:
         if copy.get("covered") is False and copy.get("extra_words"):
             line += f" (only the second has: {', '.join(copy['extra_words'])})"
         return line
+    if s == "new_candidate":  # no words here: the review reads the clause again from the session file
+        return f"{q['qid']} said on {q.get('days', 1)} day(s) — {SECTION_TITLE[s]} (shown in the review)"
     if s == "note_decay":
         note = q["note"]
         return (f"{q['qid']} note '{note['name']}' of project {note['project']}: {_q(q.get('content'), 160)} — "
@@ -136,7 +139,7 @@ def summary_line(entries: dict) -> str | None:
     parts = []
     for name, keys in (("duplicate", ("duplicate",)),
                        ("fact", ("conflict", "outcome", "fact_decay", "review", "new_fact", "promotion", "confirm", "trust_feedback")),
-                       ("note", ("note_decay",))):
+                       ("note", ("note_decay",)), ("possible new fact", ("new_candidate",))):
         n = sum(kinds.get(k, 0) for k in keys)
         if n:
             parts.append(f"{n} {name}{'s' if n != 1 else ''}")

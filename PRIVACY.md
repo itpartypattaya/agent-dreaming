@@ -22,6 +22,11 @@ Everything goes to `~/.dreaming` (or `DREAMEM_HOME`), readable by your user only
 - cooldowns, the list of rejected facts, the duplicate proposals, a snapshot of note sizes and a short diary of
   nights (`profiles/*/state`), and the journal reports you have answered about (`outcomes.json`, their ids);
 - the question about a fact from the journal carries the agent's one-line correction, unless it holds a secret;
+- possible new facts: which session file a clause is in and keyed digests (HMAC-SHA256 with `~/.dreaming/salt`, made
+  on this computer, never sent anywhere) of the message and the clause — no words; the review reads the clause again
+  from the session file to show it to your agent, and a message changed since is never shown. The fact you approve
+  is in the question file only until it is saved to memory; then only the new fact's id stays. The digests of
+  clauses you answered about (`candidates.json`) keep them from being offered again;
 - `claude-lines.json`: for each transcript, where the lines that may be yours start and end and how far it was read —
   numbers only, no words — so the next pass reads only what is new.
 
@@ -33,8 +38,9 @@ When a fact is forgotten in holographic-memory, `dreamem forget-sweep` (and ever
 
 ## What it shares
 
-Nothing. The one line a session sees at start holds counts only. The questions are shown to the agent of your session
-when you ask for the review; that agent is subject to its own provider's terms.
+Nothing. The one line a session sees at start holds counts only. The questions — and the clauses of possible new
+facts with their messages, read again from your session files — are shown to the agent of your session when you ask
+for the review; that agent is subject to its own provider's terms.
 
 ## Removing it
 

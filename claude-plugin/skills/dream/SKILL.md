@@ -41,20 +41,26 @@ It changed nothing. Your job here is to put the questions to the person and carr
    - `trust_feedback` — rejected earlier, still recalled: **yes** (lower its trust) / **no**.
    - `note_decay` — a Claude Code memory note nobody mentioned lately: **keep** / **outdated**. Nothing is written:
      tell the person the note's name and project; they can delete or fix it themselves or in a session of that project.
+   - `new_candidate` — a possible new fact: a clause the person said (shown with its message, read again from the
+     session file). **Judge each one yourself before showing anything**; show the person only what passes, and ask
+     about one at most per review. A fact only if all hold: lasting (true in a month: a trait, relationship, place,
+     possession, habit, health condition, preference, a standing rule for you — not today's event, a mood or this
+     week's plan); about the person or their people, places, pets, things, asserted by them (not a quote, a
+     hypothetical, an opinion about the world); not in memory — `memory_search` first; worth interrupting them for.
+     When unsure, it is not. Answers: **save** (word the fact as one short sentence, `--text "..."`; after the
+     `memory_add` call, `dreamem applied Q --fact-id <id it returned>`) / **no** (asked again in a month at the
+     earliest) / **never** / **not-a-fact** (you turned it down — not shown to the person) / **already-stored**
+     (`memory_search` found it). Leave the rest open: they come back another night.
    - any: **later**.
 3. Record the answer with the question's id exactly as `dreamem show` printed it (`Q3-7f2a`: the tag is the night's,
    so an answer never lands on a question of a newer night): `dreamem decide Q3-7f2a <answer> [--text "..."]`. A
    `--text` holding a secret or an instruction is refused — ask the person to say it without it. It prints one of:
    - nothing to call → done with this question;
    - a JSON with `call` (`tool` + `args`) and `check` → go on to 4.
-4. Checks, right before the call:
-   - `memory_stats`: its `database` must be the same file as `check.database`. Otherwise stop: this session's store is
-     another one (a per-project store); tell the person to answer it in a session of that project.
-   - the tool you are about to call must list an `expect` parameter (holographic-memory 0.5.0 or newer). Every call
-     carries it — the version the person was shown — and the store itself refuses the write when the fact changed
-     since the night. An older holographic-memory ignores the argument and would write unchecked: if the tool has no
-     `expect` parameter, make no call; `dreamem failed Q3-7f2a --reason holomem_older_than_0.5.0` and tell the person
-     to update holographic-memory (the question comes back).
+4. Check, right before the call: `memory_stats` — its `database` must be the same file as `check.database`.
+   Otherwise stop: this session's store is another one (a per-project store); tell the person to answer it in a
+   session of that project. A call that changes a fact carries `expect` (the version the person was shown): the store
+   refuses it when the fact changed since the night.
 5. Make exactly the printed call (same tool, same arguments). Then:
    - success → `dreamem applied Q3-7f2a --result '<short summary of the answer>'`;
    - refused (`changed_since`, not found, any error) → `dreamem failed Q3-7f2a --reason '<what it said>'`, and tell the person

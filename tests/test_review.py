@@ -138,10 +138,11 @@ def test_a_fact_ended_since_is_not_asked_about(world):
     assert [q for q in doc["questions"] if q.get("fact_id") == fid] == []
 
 
-def test_the_review_never_tells_the_agent_to_write_without_expect(world):
+def test_the_review_keeps_no_manual_version_check_and_no_tool_gate(world):
     """An older holographic-memory ignores `expect` and writes unchecked, so it never "refuses" it (0.4.1 waited for a
-    refusal that cannot come): the instructions of the review and of the skill make no call through a tool without
-    an `expect` parameter, and keep no manual check to fall back on."""
+    refusal that cannot come). 0.4.2 then barred calls through a tool without an `expect` parameter; Anton dropped
+    that gate in 0.5.0 (it also stood in the way of `memory_add`, which has no version). The instructions keep neither
+    the gate nor a manual check: the call carries `expect`, the store does the checking."""
     from importlib import resources
 
     world.fact(FRIDAY, origin="inferred", days_old=2)
@@ -150,5 +151,5 @@ def test_the_review_never_tells_the_agent_to_write_without_expect(world):
     review.show(world.homes, out=lines.append)
     skill = resources.files("dreamem").joinpath("skill/SKILL.md").read_text(encoding="utf-8")
     for text in ("\n".join(lines), skill):
-        assert "0.5.0" in text and "`expect` parameter" in text
+        assert "`expect`" in text and "holomem_older_than_0.5.0" not in text and "make no call" not in text
         assert "memory_history {fact_id}" not in text and "refuses the `expect` argument" not in text

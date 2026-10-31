@@ -24,6 +24,8 @@ class Message:
     text: str
     cwd: str = ""
     key: str = ""        # identity across files (a resumed or forked session repeats the same line)
+    source: str = ""     # which session file: Claude Code "<project>/<session>.jsonl", Codex the rollout's stem
+    below: str = ""      # Claude Code: the version a line without turnOrigin was older than (why it counted)
 
 
 @dataclass

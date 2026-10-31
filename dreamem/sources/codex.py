@@ -122,7 +122,10 @@ def _wanted(raw: bytes) -> bool:
     return b"session_meta" in raw or b'"user"' in raw
 
 
-def read(dirs: list[Path], since: float, now: float | None = None) -> tuple[list[Message], Coverage]:
+def read(dirs: list[Path], since: float, now: float | None = None,
+         stems: set[str] | None = None) -> tuple[list[Message], Coverage]:
+    """*stems*: the sessions to read (``rollout-<ts>-<uuid>``, plain or compressed, live or archived), all when None —
+    read whatever their mtime."""
     cov = Coverage(CLIENT)
     if not dirs:
         cov.note("not_used")  # Codex not installed or never run: nothing to read is not a gap
@@ -131,10 +134,10 @@ def read(dirs: list[Path], since: float, now: float | None = None) -> tuple[list
     sessions: dict[str, dict[str, Path]] = {}
     for base in dirs:
         for path in base.rglob("rollout-*.jsonl*"):
-            if not path.name.endswith((".jsonl", ".jsonl.zst")):
+            if not path.name.endswith((".jsonl", ".jsonl.zst")) or (stems is not None and _stem(path) not in stems):
                 continue
             try:
-                if path.stat().st_mtime < since:
+                if stems is None and path.stat().st_mtime < since:
                     continue
             except OSError:
                 cov.partial("vanished")
@@ -188,7 +191,7 @@ def read(dirs: list[Path], since: float, now: float | None = None) -> tuple[list
                     continue
                 seen.add(key)
                 sid = str((meta or {}).get("id") or (meta or {}).get("session_id") or stem)
-                out.append(Message(CLIENT, sid, ts, text, cwd=cwd, key=f"{CLIENT}:{key}"))
+                out.append(Message(CLIENT, sid, ts, text, cwd=cwd, key=f"{CLIENT}:{key}", source=stem))
         cov.count(kind)
         if bad:
             cov.partial("bad_lines")

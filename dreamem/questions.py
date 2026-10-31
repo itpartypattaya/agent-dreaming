@@ -25,12 +25,13 @@ from . import engineapi
 from .fsutil import read_json, write_json
 
 GENERATED, SHOWN, DECIDED, APPLIED, FAILED, DEFERRED = "generated", "shown", "decided", "applied", "failed", "deferred"
+GONE = "gone"  # a candidate whose message is no longer there as it was: never shown, nothing to answer
 OPEN = (GENERATED, SHOWN, FAILED, DEFERRED)
 CLOSED = (DECIDED, APPLIED)
 
 # Asked first: what may be wrong in memory now, then what may be missing, then the notes.
 ORDER = ("duplicate", "conflict", "outcome", "fact_decay", "review", "new_fact", "promotion", "confirm", "trust_feedback",
-         "note_decay")
+         "note_decay", "new_candidate")
 BUCKET = {"duplicate": "duplicate_pairs", "conflict": "conflicts", "fact_decay": "fact_decays", "review": "promotions",
           "new_fact": "new_facts", "promotion": "promotions", "confirm": "confirm", "trust_feedback": "trust_feedback"}
 
@@ -45,6 +46,12 @@ def _change(tool):
             raise ValueError(f"'{tool}' needs the new text: --text \"...\"")
         return {"tool": tool, "args": {"fact_id": q["fact_id"], "content": text}}
     return make
+
+
+def _add(q, text):
+    if not text:
+        raise ValueError("'save' needs the fact as one short sentence: --text \"...\"")
+    return {"tool": "memory_add", "args": {"content": text, "origin": "said"}}
 
 
 def _end(q, text):
@@ -88,6 +95,10 @@ ANSWERS = {
     "duplicate": {"yes": _merge, "not-duplicates": NOT_DUPLICATES},
     # auto-memory notes are Claude's files: the pass and the agent of the review never edit them (v1)
     "note_decay": {"keep": NOTHING, "outdated": NOTHING},
+    # a possible new fact: the review agent judges it first; "save" adds the fact the agent worded and the person
+    # approved; the rest are kept so the same clause is not offered again (`no` for CANDIDATE_REST_DAYS)
+    "new_candidate": {"save": _add, "no": NOTHING, "not-a-fact": NOTHING, "never": NOTHING,
+                      "already-stored": NOTHING},
 }
 LATER = "later"  # any section: not now, ask again tomorrow
 
@@ -109,7 +120,8 @@ def _seen_key(item: dict) -> str:
 
 def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, coverage_ok: bool,
           max_questions: int, profile: str, night_tag: str | None = None, went_wrong: list[dict] | None = None,
-          answered: set | None = None, rejected: set | None = None) -> tuple[list[dict], dict]:
+          answered: set | None = None, rejected: set | None = None,
+          candidates: list[dict] | None = None) -> tuple[list[dict], dict]:
     # Question ids carry the night: an answer meant for "Q1" of one night never lands on "Q1" of the next. The tag is
     # the caller's (unique per published night; two nights may share a `generated_at` second).
     night = night_tag or hashlib.sha1(str(result.get("generated_at") or "").encode("utf-8")).hexdigest()[:4]
@@ -196,6 +208,9 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
         qs.append({"section": "note_decay", "bucket": None, "seen_key": None, "entry_key": note["entry_key"],
                    "note": {k: note[k] for k in ("id", "project", "path", "name")}, "content": item.get("entry"),
                    "why": item.get("reason"), "last_mention_days": item.get("last_mention_days")})
+    for item in candidates or []:  # references and digests only: the review reads the words again
+        qs.append({"section": "new_candidate", "bucket": None, "seen_key": None, "ref": item["ref"],
+                   "clause": item["clause"], "days": item["days"], "store": store})
     qs.sort(key=lambda q: ORDER.index(q["section"]))
     # One question about a fact a night: the engine may offer a fact both as "people keep saying it" and as "said again
     # on different days". The first by ORDER is asked; the other waits (deferred: it comes back if not answered).
@@ -205,6 +220,9 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
         q["qid"] = f"Q{i}-{night}"
         q["profile"] = profile
         q["answer"] = None
+        if q["section"] == "new_candidate":
+            q["status"] = GENERATED  # outside max_questions: the agent asks about one at most
+            continue
         fid = q.get("fact_id")
         if fid is not None and fid in first_of:
             q["status"], q["same_fact_as"] = DEFERRED, first_of[fid]
@@ -222,6 +240,47 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
 
 def entry_key(entry: str) -> str:
     return engineapi.entry_key(entry)
+
+
+def open_sections(qs: list[dict]) -> dict[str, int]:
+    """Open questions by section, as the session line counts them: the candidates as one (one is asked at most)."""
+    sections: dict[str, int] = {}
+    for q in qs:
+        if q["status"] in OPEN and q["status"] != DEFERRED:
+            sections[q["section"]] = sections.get(q["section"], 0) + 1
+    if sections.get("new_candidate"):
+        sections["new_candidate"] = 1
+    return sections
+
+
+CANDIDATES_FILE = "candidates.json"  # in a profile's state: clause digests a person answered about
+CANDIDATE_REST_DAYS = 30
+
+
+def candidate_rests(state_dir: Path, clause: str) -> bool:
+    """Whether the clause with this digest is not to be offered: answered for good, or "no" less than
+    CANDIDATE_REST_DAYS ago."""
+    data = read_json(state_dir / CANDIDATES_FILE, {})
+    rec = data.get(clause) if isinstance(data, dict) else None
+    if not isinstance(rec, dict):
+        return False
+    if rec.get("answer") != "no":
+        return True
+    at = _stamp(rec.get("at"))
+    return at is not None and (datetime.now().astimezone() - at).days < CANDIDATE_REST_DAYS
+
+
+def answer_candidate(state_dir: Path, q: dict, answered: bool) -> None:
+    """Record (or, on undo, drop) the answer about a candidate's clause — its digest, never its words."""
+    if q.get("section") != "new_candidate" or not q.get("clause"):
+        return
+    data = read_json(state_dir / CANDIDATES_FILE, {}) or {}
+    data = data if isinstance(data, dict) else {}
+    if answered:
+        data[q["clause"]] = {"answer": q.get("answer"), "at": datetime.now().astimezone().isoformat(timespec="seconds")}
+    else:
+        data.pop(q["clause"], None)
+    write_json(state_dir / CANDIDATES_FILE, data)
 
 
 OUTCOMES_FILE = "outcomes.json"  # in a profile's state: journal events a person has answered about
@@ -333,6 +392,10 @@ def decide(q: dict, answer: str, text: str | None = None) -> dict:
     """Record the person's *answer*; returns what to do: ``{"call": {...}, "check": {...}}`` for a memory tool call,
     ``{"local": "reject" | "not-duplicates"}`` for the engine's reject list, ``{}`` when nothing is to be done."""
     answer = answer.strip().lower()
+    if q.get("status") == GONE:
+        raise ValueError(f"{q['qid']} is gone: its message changed or went since the night; nothing to answer")
+    if q.get("section") == "new_candidate" and answer != "save":
+        text = None  # only a fact to save is worded; any other text would keep the person's words here
     if answer == LATER:
         q["status"], q["answer"] = SHOWN, None
         return {}
@@ -365,10 +428,29 @@ def decide(q: dict, answer: str, text: str | None = None) -> dict:
     return {**todo, "call": call, "check": {"database": q.get("store")}}
 
 
-def applied(q: dict, result: str | None = None) -> None:
+def applied(q: dict, result: str | None = None, fact_id: int | None = None) -> None:
     if q.get("status") != DECIDED or not q.get("call"):
         raise ValueError(f"{q['qid']} has no decided call to mark applied (status {q.get('status')})")
     q["status"], q["result"] = APPLIED, result
+    if q.get("section") == "new_candidate":
+        # The fact now lives in memory; the person's words leave this file: only the new fact's id stays (so a forget
+        # can find it), not the text, the call or what the tool answered.
+        q["fact_id"] = fact_id
+        drop_words(q)
+
+
+WORDS = ("text", "call", "result", "failure")  # what of a candidate may hold words: the fact, the call, tool answers
+
+
+def drop_words(q: dict) -> None:
+    """A candidate that reached its end keeps no words (only the open, approved save may hold its text)."""
+    for k in WORDS:
+        q.pop(k, None)
+
+
+def gone(q: dict) -> None:
+    q["status"] = GONE
+    drop_words(q)
 
 
 def failed(q: dict, reason: str) -> None:
