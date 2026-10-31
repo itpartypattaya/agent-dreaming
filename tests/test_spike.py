@@ -284,8 +284,7 @@ def test_an_answer_names_the_store_and_the_version_shown(world):
     todo = json.loads(printed[0])
     # holographic-memory takes `expect` on every write (issue #2): the store itself refuses a fact changed since shown.
     assert todo["call"] == {"tool": "memory_end", "args": {"fact_id": fid, "expect": {str(fid): world.version(fid)}}}
-    # The version stays in the check for a store older than `expect`, which the agent checks itself.
-    assert todo["check"] == {"database": str(world.db), "version": {"fact_id": fid, "version_id": world.version(fid)}}
+    assert todo["check"] == {"database": str(world.db)}
 
 
 @pytest.mark.parametrize("answer, tool", [("yes", "memory_feedback"), ("no", "memory_feedback"),

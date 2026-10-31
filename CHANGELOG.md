@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.2 — 2026-10-31
+
+- The review needs holographic-memory 0.5.0 or newer for its memory calls. 0.4.1 fell back to checking the version
+  by hand "if the tool refuses `expect`" — but an older holographic-memory does not refuse it: it ignores the
+  argument and writes unchecked, so the fallback never ran. Now the agent makes a call only through a tool that
+  lists an `expect` parameter; without it the answer is recorded, the call is not made, and the person is asked to
+  update holographic-memory. The manual version check is gone from the skill and `check.version` from `decide`.
+
 ## 0.4.1 — 2026-10-31
 
 - Every memory call the review prints carries `expect` with the version the person was shown, not only a merge:

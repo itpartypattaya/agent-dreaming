@@ -136,3 +136,19 @@ def test_a_fact_ended_since_is_not_asked_about(world):
     world.end(fid)
     doc = night(world)
     assert [q for q in doc["questions"] if q.get("fact_id") == fid] == []
+
+
+def test_the_review_never_tells_the_agent_to_write_without_expect(world):
+    """An older holographic-memory ignores `expect` and writes unchecked, so it never "refuses" it (0.4.1 waited for a
+    refusal that cannot come): the instructions of the review and of the skill make no call through a tool without
+    an `expect` parameter, and keep no manual check to fall back on."""
+    from importlib import resources
+
+    world.fact(FRIDAY, origin="inferred", days_old=2)
+    night(world)
+    lines = []
+    review.show(world.homes, out=lines.append)
+    skill = resources.files("dreamem").joinpath("skill/SKILL.md").read_text(encoding="utf-8")
+    for text in ("\n".join(lines), skill):
+        assert "0.5.0" in text and "`expect` parameter" in text
+        assert "memory_history {fact_id}" not in text and "refuses the `expect` argument" not in text

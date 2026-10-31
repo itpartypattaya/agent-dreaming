@@ -17,12 +17,12 @@ INSTRUCTIONS = """How to close a question (one at a time, in the person's langua
 - Ask it with the texts as shown. Wait for the person's own answer; never answer for them.
 - Record it: dreamem decide <Q> <answer> [--text "new text"] [--profile P]. It prints the memory tool call to make, or
   nothing when there is none.
-- Before the call: memory_stats — its `database` must be the question's store (same file); otherwise stop.
-  For every call except memory_merge: memory_history {fact_id} — the current version must be the question's
-  version_id; otherwise the fact changed since the night: dreamem failed <Q> --reason changed_since, and show the
-  person the new text instead.
-- Then make exactly that call. Success: dreamem applied <Q>. A refusal (changed_since, not found): dreamem failed <Q>
-  --reason <what it said>.
+- Before the call: memory_stats — its `database` must be the question's store (same file); otherwise stop. The tool
+  must list an `expect` parameter (holographic-memory 0.5.0+): an older one ignores it and would write unchecked —
+  then make no call: dreamem failed <Q> --reason holomem_older_than_0.5.0, and ask the person to update it.
+- Then make exactly that call; its `expect` makes the store refuse a fact changed since the night. Success: dreamem
+  applied <Q>. A refusal (changed_since, not found): dreamem failed <Q> --reason <what it said>, and show the person
+  the current text.
 - "Not now" is an answer: dreamem decide <Q> later. A mistake: dreamem undo <Q> (memory is not touched by it).
 - Notes of Claude Code (note_decay) are never edited here: tell the person which note, and that they can fix or delete
   it themselves, or in a session of that project."""
