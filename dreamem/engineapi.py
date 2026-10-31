@@ -37,9 +37,12 @@ def state_files(folder: Path):
     return dream.state_files(folder)
 
 
-def engine_config(*, store: Path | None, settings: dict, tz: str, min_trust: float | None) -> dict:
-    cfg = {"timezone": tz, "fact_source": "holographic" if store is not None else "none",
-           "store": str(store) if store is not None else "",
+def engine_config(*, store: Path | None, settings: dict, tz: str, min_trust: float | None,
+                  external: bool = False) -> dict:
+    """*external*: the facts come from another memory system, handed to ``run_night`` (no store for the engine)."""
+    source = "external" if external else "holographic" if store is not None else "none"
+    cfg = {"timezone": tz, "fact_source": source,
+           "store": str(store) if store is not None and not external else "",
            "exclude_patterns": list(settings.get("exclude_patterns") or []),
            "agent_names": list(settings.get("agent_names") or []),
            # Nothing here asks about recurring themes (they are not kept either): not counted, half a night saved.
@@ -50,17 +53,21 @@ def engine_config(*, store: Path | None, settings: dict, tz: str, min_trust: flo
 
 
 def run_night(*, state_dir: Path, config: dict, notes: list[str], dedupe: list[str], messages: list[dict],
-              acks: dict | None, windows: dict) -> tuple[dict, list[str]]:
+              acks: dict | None, windows: dict, facts: list[dict] | None = None,
+              gone: set | None = None) -> tuple[dict, list[str]]:
     """(the night's result, the notes as the engine indexed them). Sweeps what was forgotten or merged in the store
-    since the last night out of the state first."""
+    since the last night out of the state first. *facts*: an external source's facts (``fact_source`` external)."""
     state_dir.mkdir(parents=True, exist_ok=True)
     dream.configure(config)
+    dream.use_facts(facts or ())
     state = dream.state_files(state_dir)
     dream.use_state(state)
     memory = dream.Memory(notes=notes, dedupe=dedupe)
     if config.get("store"):
         dream.forget_sweep()
         dream.merge_sweep()
+    elif facts is not None:  # an external source: its gone facts out of the state, its facts in the diary index
+        dream.forget_sweep(tombstones=gone or set(), facts=facts)
     result = dream.night(memory=memory, messages=messages, state=state, acks=acks,
                          window_days=int(windows.get("themes_days", 14)),
                          corr_days=int(windows.get("corroboration_days", 30)),
@@ -68,10 +75,10 @@ def run_night(*, state_dir: Path, config: dict, notes: list[str], dedupe: list[s
     return result, dream.parse_md_entries(memory)
 
 
-def forget_sweep(*, state_dir: Path, config: dict) -> dict:
+def forget_sweep(*, state_dir: Path, config: dict, tombstones=None, facts=None) -> dict:
     dream.configure(config)
     dream.use_state(dream.state_files(state_dir))
-    return dream.forget_sweep()
+    return dream.forget_sweep(tombstones=tombstones, facts=facts)
 
 
 def reject(state_dir: Path, fact_id, content: str, reason: str = "") -> str:

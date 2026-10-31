@@ -27,7 +27,8 @@ from .fsutil import write_private
 from .paths import Homes
 
 DEFAULTS = {
-    "clients": ["claude-code", "codex"],
+    # Whose sessions are read: Claude Code, Codex, Antigravity and Gemini CLI (a client never run reads as not used).
+    "clients": ["claude-code", "codex", "antigravity", "gemini-cli"],
     # Claude Code keeps transcripts 30 days (cleanupPeriodDays): a longer window would read as silence.
     "windows": {"themes_days": 14, "corroboration_days": 30, "md_decay_days": 30},
     "timezone": "auto",
@@ -37,8 +38,10 @@ DEFAULTS = {
     # A longer user turn is mostly a pasted document or log, not the person's words.
     "max_message_chars": 2000,
     "exclude_patterns": [],
-    "agent_names": ["claude", "codex"],
+    "agent_names": ["claude", "codex", "gemini"],
     "fact_source": "auto",  # auto | holographic | none
+    # Other memory systems, each a profile of its own: [providers.<name>] enabled = true, path = "…"
+    "providers": {},
     # When the night's pass runs: "HH:MM" local time — the first session after it; "any" — the first session of each
     # day; "" — not chosen yet (as "any", and the agent asks the person once).
     "dream_time": "",
@@ -179,9 +182,30 @@ class Profile:
     project_key: str | None     # messages of this project only; None: all
     notes: bool                 # the auto-memory notes are this profile's questions
     min_trust: float | None = None
+    provider: str = "holographic"  # the memory system of the store (``providers``)
 
 
 def profiles(homes: Homes, settings: dict) -> list[Profile]:
+    return _holographic_profiles(homes, settings) + other_profiles(homes, settings)
+
+
+def other_profiles(homes: Homes, settings: dict) -> list[Profile]:
+    """A profile for each other memory system turned on in ``[providers.<name>]`` (or found by its provider), with
+    its store; no notes (they are the holographic or default profile's) and every message."""
+    from . import providers  # the providers read settings; imported here to keep config importable on its own
+    out = []
+    for name, cls in providers.PROVIDERS.items():
+        if name == providers.DEFAULT:
+            continue
+        table = (settings.get("providers") or {}).get(name)
+        table = table if isinstance(table, dict) else {}
+        store = cls.locate(homes, table)
+        if store is not None:
+            out.append(Profile(name, store, None, False, provider=name))
+    return out
+
+
+def _holographic_profiles(homes: Homes, settings: dict) -> list[Profile]:
     source = settings.get("fact_source", "auto")
     store = holomem_store(homes)
     if source == "none" or (source == "auto" and not (store.path and store.path.exists())

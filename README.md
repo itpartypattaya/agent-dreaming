@@ -1,6 +1,7 @@
 # agent-dreaming
 
-A nightly, read-only memory review for **Claude Code** and **Codex CLI**.
+A nightly, read-only memory review for **Claude Code**, **Codex CLI** and **Antigravity** (Gemini CLI's sessions are
+read too).
 
 Agents that remember things also remember wrong things: a guess stored as a fact, two retellings of one fact, a note
 about a project that ended a month ago. agent-dreaming compares what your agents *stored* with what *you actually said*
@@ -12,12 +13,13 @@ only through the memory tools your agent already has.
 It has three parts:
 
 - **The pass** (`dreamem run`) is deterministic: no model, no network, a few seconds. It reads your Claude Code
-  transcripts, Codex sessions, the facts of [holographic-memory](https://github.com/itpartypattaya/holographic-memory)
-  and Claude Code's own memory notes, and writes its questions under `~/.dreaming`. Nothing else.
+  transcripts, Codex, Antigravity and Gemini CLI sessions, the facts of
+  [holographic-memory](https://github.com/itpartypattaya/holographic-memory) or of the reference MCP `memory` server,
+  and Claude Code's own memory notes (subagents' too), and writes its questions under `~/.dreaming`. Nothing else.
 - **The summary**: the next session starts with one line — "Dreaming 2026-10-30: 3 memory questions wait…" — counts
   only, never the text of a fact.
-- **The review** (`/agent-dreaming:dream` in Claude Code, `$dreaming` in Codex): the agent puts the questions to you one
-  at a time and carries out exactly your answers.
+- **The review** (`/agent-dreaming:dream` in Claude Code, `$dreaming` in Codex, the skill `dreaming` in Antigravity):
+  the agent puts the questions to you one at a time and carries out exactly your answers.
 
 ## How a night and a review go
 
@@ -35,7 +37,9 @@ It has three parts:
 4. **Your answer** is recorded with `dreamem decide`. Most answers print one memory call — `memory_end`,
    `memory_change`, `memory_merge`… — and the agent first checks with `memory_stats` that this session talks to the
    same store the night read. Then it makes exactly that call and reports back with `dreamem applied` (or
-   `dreamem failed`, and the question comes back with the current text).
+   `dreamem failed`, and the question comes back with the current text). An answer about a Claude Code note prints
+   an edit instead: the agent runs `dreamem verify` (is the file still the one you were shown?) and only then
+   changes or deletes the note with its file tools.
 5. **Next night**, an unanswered question is asked again; an answered one rests.
 
 ## What it asks
@@ -45,7 +49,7 @@ Questions come in this order: what may be wrong in memory now, then what may be 
 | Question | When it is asked | Example | Your answers |
 |---|---|---|---|
 | **Look like one fact — merge?** (`duplicate`) | two facts say the same thing in other words | «Supplier brings beans on Tuesdays» and «Beans arrive Tuesday mornings» | yes · not-duplicates |
-| **Conflicts with memory** (`conflict`) | a fact and a memory note or `CLAUDE.md` speak of one thing with other numbers, or one negates the other | a fact says 9 pm, a note says 10 pm | changed · outdated · wrong · keep |
+| **Conflicts with memory** (`conflict`) | a fact and a memory note or `CLAUDE.md` speak of one thing with other numbers, or one negates the other | a fact says 9 pm, a note says 10 pm | changed · outdated · wrong · keep · when the other side is a Claude Code note: note-changed · note-outdated |
 | **An answer that used it went wrong** (`outcome`) | an agent reported in holographic-memory's journal that an answer built on this fact was corrected as stale | the agent was told the office moved | keep · outdated · changed · wrong · forget |
 | **Not mentioned for long — still true?** (`fact_decay`) | nobody has said it for the window (30 days) | a project deadline from last month | keep · outdated · changed · wrong · forget |
 | **Corroborated, unconfirmed** (`review`) | your conversations agree with it, but nobody said it is so | a fact of unknown origin | yes · no · outdated · wrong · forget · reject |
@@ -53,7 +57,8 @@ Questions come in this order: what may be wrong in memory now, then what may be 
 | **People keep saying it** (`promotion`) | you said it on different days | you mentioned the same habit three times | yes · no · outdated · forget |
 | **Said again** (`confirm`) | a fact repeated on different days, worth marking confirmed | — | yes · no |
 | **Rejected, still recalled** (`trust_feedback`) | you rejected a fact earlier and it keeps coming up | — | yes (lower its trust) · no |
-| **A Claude Code note nobody mentioned lately** (`note_decay`) | an auto-memory note untouched by your conversations | `memory/deploy.md` of an old project | keep · outdated (you edit the note yourself) |
+| **A Claude Code note repeats what is kept** (`note_duplicate`) | a note says what another note or a fact already says | two notes about the same deploy | drop-note · keep-both |
+| **A Claude Code note nobody mentioned lately** (`note_decay`) | an auto-memory note untouched by your conversations | `memory/deploy.md` of an old project | keep · outdated (deletes the note) · changed |
 | **A possible new fact** (`new_candidate`) | you said something lasting that memory does not hold | «we live in Tbilisi with my husband Oleg» | save · no · never |
 
 Any question also takes **later**. What each answer does in memory:
@@ -97,6 +102,31 @@ so, shows the correction line if there is one, and asks whether the fact still h
 fact (not for a bad search or a wrong answer), when the fact is named in the correction or came up in two such
 reports, once per report, and only while the fact is still the version the answer saw.
 
+## Memory systems
+
+| System | What the night reads | How an answer is carried out | What it cannot ask |
+|---|---|---|---|
+| **holographic-memory** (0.5.0+) | its SQLite store, read-only | its `memory_*` tools; every write carries `expect`, the version you were shown | — (the reference: every question) |
+| **Claude Code memory notes** (auto memory, subagents' memory) | `~/.claude/projects/*/memory/`, `~/.claude/agent-memory/*/`, a project's `.claude/agent-memory[-local]/*/` | the agent edits or deletes the note after `dreamem verify` shows it is the file you were shown | a note has no history: "outdated" deletes it |
+| **MCP `memory` server** (`@modelcontextprotocol/server-memory` 2.0.1) | its JSONL file, found by `MEMORY_FILE_PATH` in Claude Code's or Codex's MCP config, or `[providers.mcp-memory] path` | `delete_observations` by the exact text (the agent first finds it in `open_nodes`); a change adds the new text, then deletes the old | no versions, history, origin or trust: no "people keep saying it", "said again", "rejected, still recalled" or "merge?"; "still true?" only after 60 days of its own first-sighting journal; changed and wrong are one answer |
+| **Codex memories** | `~/.codex/memories*/` — what is already written there is not asked about | never edited: Codex calls them generated state | — |
+
+Each system is a profile of its own. Not covered: cloud memories (mem0, Supermemory: a network adapter only on request),
+claude-mem (observations of tool runs, not facts about you), Zep, Cognee, Letta.
+
+## Agents
+
+| Agent | Your messages | The review | The session line |
+|---|---|---|---|
+| Claude Code | transcripts | plugin skill `/agent-dreaming:dream` | plugin hook |
+| Codex CLI | rollouts (plain and zstd) | skill `$dreaming` (`dreamem install codex`) | hook in `config.toml` (trust it in `/hooks`) |
+| Antigravity (agy 1.4.3) | `~/.gemini/antigravity*/brain/*/…/transcript.jsonl`: only what is inside `<USER_REQUEST>` | skill `dreaming` in `~/.gemini/config/skills` (`dreamem install antigravity`) | named hooks in `~/.gemini/config/hooks.json`; tonight's pass starts detached |
+| Gemini CLI (0.64) | `~/.gemini/tmp/*/chats/session-*.jsonl`, tool results left out; `~/.gemini/GEMINI.md` (its global memory file) is read as already written | not installed yet: point it at `SKILL.md` by hand | not yet |
+| Grok Build | not read yet | it loads skills from `~/.claude/skills/` and MCP servers from `~/.claude.json`: copy the skill there by hand | its SessionStart output is ignored |
+| OpenAI dots, Grok in X or Telegram | — cloud agents keep no local history to read | — | — |
+
+Sessions of an agent never run read as "not used", not as a gap.
+
 ## Whose words count
 
 Only **your** words count as evidence. Background tasks, scheduled jobs, subagents, `codex exec` scripts, slash
@@ -131,6 +161,22 @@ dreamem run --dry-run        # see what it would ask, keep nothing
 dreamem install codex
 ```
 
+**Antigravity** — the skill in `~/.gemini/config/skills/dreaming` and two named hooks in `~/.gemini/config/hooks.json`
+(other hooks there are kept; `--dry-run`, `--uninstall` as above):
+
+```bash
+dreamem install antigravity
+```
+
+**MCP `memory` server** — nothing to install: when Claude Code or Codex runs `server-memory` with `MEMORY_FILE_PATH`,
+the night finds the file. Elsewhere, name it; `enabled = false` turns it off:
+
+```toml
+[providers.mcp-memory]
+path = "~/memory.jsonl"
+entity = "Alex"              # where a saved new fact goes (otherwise the agent asks for it)
+```
+
 **When the pass runs** is yours to choose — your computer may be off at night, or you may use the agent by day only:
 
 ```bash
@@ -155,7 +201,8 @@ dreamem install schedule --dry-run
 |---|---|
 | `dreamem run` | The pass. `--if-due`: only if no pass succeeded today and it is past `dream_time`, silent when another pass holds the lock. `--dry-run`: prints the report and keeps nothing (not even the salt). `--profile P`: one profile only (repeatable). |
 | `dreamem show` | Prints the open questions for a review and marks them shown. Possible new facts are read again from the session files here. `--json` for machines, `--all` with the answered ones. |
-| `dreamem decide Q answer [--text T]` | Records your answer. Prints the memory call to make (tool, arguments, the store to check), or that none is needed. `--text` carries the new text for changed / wrong / save; a text holding a secret or an instruction is refused. |
+| `dreamem verify Q` | Before the agent edits a Claude Code note: `ok` when the file is byte for byte the one you were shown; `changed` fails the question, and it comes back with the note as it is now. Reads only. |
+| `dreamem decide Q answer [--text T] [--entity E]` | Records your answer. Prints the memory call to make (tool, arguments, the store to check), or that none is needed. `--text` carries the new text for changed / wrong / save; a text holding a secret or an instruction is refused. A Claude Code note's answer prints an `edit`; an MCP `memory` change prints `calls`, made in that order. `--entity`: where a new fact goes in the MCP `memory` server. |
 | `dreamem applied Q` | The memory call succeeded. `--result` keeps a short note; `--fact-id N` (required for a saved new fact) records the id `memory_add` gave. |
 | `dreamem failed Q --reason R` | The store refused the call (the fact changed since, not found…). The question comes back with the current text. |
 | `dreamem undo Q` | Cancels a recorded answer (with a `reject` or `not-duplicates`). A memory call already made is undone with `memory_revert` or not at all — the agent says which. |
@@ -163,7 +210,7 @@ dreamem install schedule --dry-run
 | `dreamem status` | Where things are: home, clients, timezone, the store, each profile's last night and open questions, coverage, dream time, whether a pass is due. |
 | `dreamem forget-sweep` | After a `memory_forget`: removes the fact from every copy the dream keeps. |
 | `dreamem config time [HH:MM\|any]` | Shows or sets when the pass runs. |
-| `dreamem install claude-code\|codex\|schedule` | Hooks it into a CLI or schedules it. `--dry-run`, `--uninstall`; `--time HH:MM\|any` sets the dream time on the way. |
+| `dreamem install claude-code\|codex\|antigravity\|schedule` | Hooks it into a CLI or schedules it. `--dry-run`, `--uninstall`; `--time HH:MM\|any` sets the dream time on the way. |
 | `dreamem hook session-start --client X [--async]` | What the CLIs' hooks call; not for you. |
 
 The question ids look like `Q3-7f2a`: the tag is the night's, so an answer never lands on a question of a newer night.
@@ -174,15 +221,19 @@ With several profiles, add `--profile <name>` when a command asks for it.
 `~/.dreaming/config.toml` (all optional):
 
 ```toml
-clients = ["claude-code", "codex"]
+clients = ["claude-code", "codex", "antigravity", "gemini-cli"]
 timezone = "auto"            # the machine's offset; or an IANA name
 dream_time = "23:00"         # when the pass runs: HH:MM, or "any" (first session of the day)
 max_questions = 7            # per night; the rest wait
 max_candidates = 10          # possible new facts handed to the agent to judge per night; 0: none
 max_message_chars = 2000     # longer turns are pasted documents, not your words
 exclude_patterns = []        # regexes of text that must never count as yours
-agent_names = ["claude", "codex"]  # words that name your agents, not topics
+agent_names = ["claude", "codex", "gemini"]  # words that name your agents, not topics
 fact_source = "auto"         # auto | holographic | none
+
+[providers.mcp-memory]       # found by itself in the CLIs' MCP config; see Install
+# path = "~/memory.jsonl"
+# enabled = false
 
 [windows]
 themes_days = 14
@@ -190,21 +241,22 @@ corroboration_days = 30      # Claude Code keeps transcripts 30 days by default
 md_decay_days = 30
 ```
 
-Locations follow `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HOLOMEM_HOME` and `DREAMEM_HOME`.
+Locations follow `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HOLOMEM_HOME`, `DREAMEM_HOME` and `DREAMEM_GEMINI_DIR` (`~/.gemini`).
 
 **Profiles.** One pass is one profile: one fact store and the messages that may back its facts. With holographic-memory
 in `scope = "global"` there is one profile, `global`. In `scope = "project"` each project's store is a profile of its
 own, reviewed with that project's conversations only, and the notes get a profile `notes`. Without holographic-memory
-the profile `default` works on Claude Code's memory notes alone. In the review, the agent answers a question only in a
+the profile `default` works on Claude Code's memory notes alone. The MCP `memory` server's file is a profile
+`mcp-memory`, with every message. In the review, the agent answers a question only in a
 session connected to that question's store; for another project's store it tells you to answer it there.
 
 ## What it reads, writes, and never does
 
 | | |
 |---|---|
-| Reads | `~/.claude/projects/*/*.jsonl` (transcripts), `~/.claude/projects/*/memory/*.md` (auto-memory), `~/.codex/sessions/**` (`.jsonl` and `.jsonl.zst`), `~/.codex/memories*/`, `CLAUDE.md` / `AGENTS.md`, holographic-memory's database (read-only). |
-| Writes | only `~/.dreaming` (or `DREAMEM_HOME`): its state, the questions, `report.md`, `summary.json`, `salt` (this install's key for the digests), the digests of clauses you answered about (`candidates.json`), and `claude-lines.json` — where in each transcript the lines that may be yours start and end. Your messages are read in memory for the pass and stored nowhere — not even as snippets. |
-| Never | writes to memory, transcripts, Claude or Codex settings; sends anything over the network; runs a model. Memory changes are made by your agent, in a session, on your answer. (SQLite itself may create the `-wal`/`-shm` files next to the holographic-memory database when it reads a database in WAL mode whose writer is not running, as any reader does; the database is never written.) |
+| Reads | `~/.claude/projects/*/*.jsonl` (transcripts), `~/.claude/projects/*/memory/*.md` (auto-memory), `~/.claude/agent-memory/*/` and a project's `.claude/agent-memory[-local]/*/` (subagents), `~/.codex/sessions/**` (`.jsonl` and `.jsonl.zst`), `~/.codex/memories*/`, Antigravity's and Gemini CLI's sessions under `~/.gemini`, `CLAUDE.md` / `AGENTS.md` / `GEMINI.md`, holographic-memory's database (read-only), the MCP `memory` server's JSONL file. |
+| Writes | only `~/.dreaming` (or `DREAMEM_HOME`): its state, the questions, `report.md`, `summary.json`, `salt` (this install's key for the digests), the digests of clauses you answered about (`candidates.json`), `claude-lines.json` — where in each transcript the lines that may be yours start and end, and for the MCP `memory` server `ids.json` / `first-seen.json` (digests of its observations with an id and the day first seen, never their words). Your messages are read in memory for the pass and stored nowhere — not even as snippets. |
+| Never | writes to memory, transcripts, the agents' settings (`dreamem install` excepted, on your command); sends anything over the network; runs a model. Memory changes are made by your agent, in a session, on your answer. (SQLite itself may create the `-wal`/`-shm` files next to the holographic-memory database when it reads a database in WAL mode whose writer is not running, as any reader does; the database is never written.) |
 
 Details: [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md).
 
@@ -215,16 +267,24 @@ Details: [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md).
 - Only your own answer counts: the agent never answers for you, never reads "yes" into silence, never carries one
   answer over to another question.
 - The agent makes only the call `dreamem decide` printed, after checking the store. It never forgets a fact you did
-  not ask to forget and never edits Claude Code notes, `CLAUDE.md`, `AGENTS.md` or Codex memories in a review.
+  not ask to forget. It edits a Claude Code memory note only on your answer, after `dreamem verify` shows it is the
+  text you were shown, and never edits `CLAUDE.md`, `AGENTS.md` or Codex memories.
+- In a system without versions the check is the exact text: an MCP `memory` observation is deleted only on a
+  word-for-word match, and a change adds the new text before it deletes the old (a failure in between leaves both,
+  and the next night asks about the pair).
 - A call that changes a fact carries `expect`, the version you were shown; holographic-memory 0.5.0 or newer refuses
   it when the fact changed since the night.
 
 ## Limits
 
-- Both CLIs' session formats are internal and change between versions. Unknown shapes are left out and reported as
+- The agents' session formats are internal and change between versions. Unknown shapes are left out and reported as
   partial coverage; a night with partial coverage asks no "still relevant?" question.
 - A short quote you pasted and a sentence you typed look the same in a transcript.
-- Claude Code's memory notes and Codex memories are never edited by this tool (the review tells you which note to fix).
+- Codex memories are never edited (the review tells you how: a reset of Codex memory or a rule in `AGENTS.md`).
+  A project's `autoMemoryDirectory` is named in `dreamem status`, not read: Claude Code honours it only in a trusted
+  folder, which cannot be told from outside.
+- The MCP `memory` server 2.0.1 does not say how many observations it deleted in a field: the agent reads the reply
+  ("Deleted 0 of 1 observations" is a failure). Duplicates between its observations are not asked about yet.
 - An older holographic-memory (before 0.5.0) ignores `expect`: a change then goes through unchecked — update
   holographic-memory.
 - Possible new facts come from the last 30 days only, and the filter is tuned for Russian and English.

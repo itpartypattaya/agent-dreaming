@@ -21,7 +21,9 @@ import hashlib
 from datetime import datetime
 from pathlib import Path
 
-from . import engineapi
+from . import engineapi, providers
+from .providers import holographic
+from .providers.base import NOT_DUPLICATES, NOTHING, REJECT
 from .fsutil import read_json, write_json
 
 GENERATED, SHOWN, DECIDED, APPLIED, FAILED, DEFERRED = "generated", "shown", "decided", "applied", "failed", "deferred"
@@ -31,75 +33,15 @@ CLOSED = (DECIDED, APPLIED)
 
 # Asked first: what may be wrong in memory now, then what may be missing, then the notes.
 ORDER = ("duplicate", "conflict", "outcome", "fact_decay", "review", "new_fact", "promotion", "confirm", "trust_feedback",
-         "note_decay", "new_candidate")
+         "note_duplicate", "note_decay", "new_candidate")
+NOTE_KEYS = ("id", "project", "path", "name", "sha256")
 BUCKET = {"duplicate": "duplicate_pairs", "conflict": "conflicts", "fact_decay": "fact_decays", "review": "promotions",
           "new_fact": "new_facts", "promotion": "promotions", "confirm": "confirm", "trust_feedback": "trust_feedback"}
 
 
-def _feedback(action):
-    return lambda q, text: {"tool": "memory_feedback", "args": {"fact_id": q["fact_id"], "action": action}}
-
-
-def _change(tool):
-    def make(q, text):
-        if not text:
-            raise ValueError(f"'{tool}' needs the new text: --text \"...\"")
-        return {"tool": tool, "args": {"fact_id": q["fact_id"], "content": text}}
-    return make
-
-
-def _add(q, text):
-    if not text:
-        raise ValueError("'save' needs the fact as one short sentence: --text \"...\"")
-    return {"tool": "memory_add", "args": {"content": text, "origin": "said"}}
-
-
-def _end(q, text):
-    return {"tool": "memory_end", "args": {"fact_id": q["fact_id"]}}
-
-
-def _forget(q, text):
-    return {"tool": "memory_forget", "args": {"fact_id": q["fact_id"]}}
-
-
-def _merge(q, text):
-    keep, copy = q["keep"], q["copy"]
-    args = {"fact_id": keep["fact_id"], "from": [copy["fact_id"]],
-            "expect": {str(keep["fact_id"]): keep["version_id"], str(copy["fact_id"]): copy["version_id"]}}
-    if q.get("keywords_after"):
-        args["keywords"] = q["keywords_after"]
-    return {"tool": "memory_merge", "args": args}
-
-
-NOTHING = None          # decided, nothing to call
-REJECT = "reject"       # the engine's reject list (dream-reject.py <fact_id>)
-NOT_DUPLICATES = "not-duplicates"
-_FACT_ANSWERS = {"yes": _feedback("confirmed"), "no": _feedback("unhelpful"), "outdated": _end,
-                 "wrong": _change("memory_correct"), "forget": _forget, "reject": REJECT}
-ANSWERS = {
-    # a fact people stand behind, said again on different days
-    "promotion": {"yes": _feedback("confirmed"), "no": REJECT, "outdated": _end, "forget": _forget},
-    # a fact without a known origin, corroborated: only a person's "yes" gives it one
-    "review": dict(_FACT_ANSWERS),
-    # an agent stored it lately and nobody stood behind it yet
-    "new_fact": dict(_FACT_ANSWERS),
-    "confirm": {"yes": _feedback("confirmed"), "no": NOTHING},
-    "trust_feedback": {"yes": _feedback("unhelpful"), "no": NOTHING},
-    "fact_decay": {"keep": _feedback("confirmed"), "outdated": _end, "changed": _change("memory_change"),
-                   "wrong": _change("memory_correct"), "forget": _forget},
-    # an answer that used it went wrong, by the agent's own report in holographic-memory's journal
-    "outcome": {"keep": _feedback("confirmed"), "outdated": _end, "changed": _change("memory_change"),
-                "wrong": _change("memory_correct"), "forget": _forget},
-    "conflict": {"changed": _change("memory_change"), "outdated": _end, "wrong": _change("memory_correct"),
-                 "keep": NOTHING},
-    "duplicate": {"yes": _merge, "not-duplicates": NOT_DUPLICATES},
-    # auto-memory notes are Claude's files: the pass and the agent of the review never edit them (v1)
-    "note_decay": {"keep": NOTHING, "outdated": NOTHING},
-    # a possible new fact: the review agent judges it first; "save" adds the fact the agent worded and the person
-    # approved; the rest are kept so the same clause is not offered again (`no` for CANDIDATE_REST_DAYS)
-    "new_candidate": {"save": _add, "no": NOTHING, "not-a-fact": NOTHING, "never": NOTHING,
-                      "already-stored": NOTHING},
-}
+# The answers each section takes and the call each makes are the store's own (``providers``); holographic-memory's
+# table, the reference, is kept here under its old name.
+ANSWERS = holographic.ANSWERS
 LATER = "later"  # any section: not now, ask again tomorrow
 
 
@@ -121,13 +63,15 @@ def _seen_key(item: dict) -> str:
 def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, coverage_ok: bool,
           max_questions: int, profile: str, night_tag: str | None = None, went_wrong: list[dict] | None = None,
           answered: set | None = None, rejected: set | None = None,
-          candidates: list[dict] | None = None) -> tuple[list[dict], dict]:
+          candidates: list[dict] | None = None, provider=None, note_pairs: list[dict] | None = None,
+          notes: list | None = None) -> tuple[list[dict], dict]:
     # Question ids carry the night: an answer meant for "Q1" of one night never lands on "Q1" of the next. The tag is
     # the caller's (unique per published night; two nights may share a `generated_at` second).
     night = night_tag or hashlib.sha1(str(result.get("generated_at") or "").encode("utf-8")).hexdigest()[:4]
     """The night's questions from the engine's JSON, and what was left out and why."""
     qs: list[dict] = []
     skipped: dict[str, int] = {}
+    provider = provider or providers.get(None, store)
 
     def skip(why):
         skipped[why] = skipped.get(why, 0) + 1
@@ -146,6 +90,8 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
         q = {"section": section, "bucket": BUCKET[section], "seen_key": _seen_key(item), "fact_id": fid,
              "version_id": (state or {}).get("version_id"), "origin": (state or {}).get("origin"),
              "content": item.get("content"), "why": item.get("why"), "store": store}
+        if (state or {}).get("locator") is not None:
+            q["locator"] = state["locator"]  # where the fact lives in its system (no numeric id there)
         q.update(extra)
         qs.append(q)
 
@@ -178,6 +124,9 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
         if not coverage_ok:
             skip("fact_decay:coverage")
             continue
+        if not provider.can_decay():
+            skip("fact_decay:no_retrievals")  # nothing tells "nobody used it" from "nobody needed it yet"
+            continue
         fact_q("fact_decay", item)
     for item in result.get("promotions") or []:
         state = facts.get(int(item["fact_id"])) if str(item.get("fact_id")).isdigit() else None
@@ -206,8 +155,23 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
             skip("note_decay:unmapped")
             continue
         qs.append({"section": "note_decay", "bucket": None, "seen_key": None, "entry_key": note["entry_key"],
-                   "note": {k: note[k] for k in ("id", "project", "path", "name")}, "content": item.get("entry"),
+                   "note": {k: note.get(k) for k in NOTE_KEYS}, "content": item.get("entry"),
                    "why": item.get("reason"), "last_mention_days": item.get("last_mention_days")})
+    for pair in note_pairs or []:
+        a = pair["note"]
+        other = pair.get("other_note")
+        q = {"section": "note_duplicate", "bucket": None, "seen_key": None, "pair": pair["key"],
+             "note": {k: getattr(a, k) for k in NOTE_KEYS}, "content": a.text}
+        if other is not None:
+            q.update(other={k: getattr(other, k) for k in NOTE_KEYS}, other_content=other.text)
+        else:
+            q.update(fact=pair["fact"], store=store)
+        qs.append(q)
+    for q in qs:  # a conflict with a Claude Code note: the note may be what no longer holds
+        if q["section"] == "conflict" and notes:
+            note = note_of(q.get("conflicts") or [], notes)
+            if note is not None:
+                q["note"] = {k: getattr(note, k) for k in NOTE_KEYS}
     for item in candidates or []:  # references and digests only: the review reads the words again
         qs.append({"section": "new_candidate", "bucket": None, "seen_key": None, "ref": item["ref"],
                    "clause": item["clause"], "days": item["days"], "store": store})
@@ -219,6 +183,8 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
     for i, q in enumerate(qs, 1):
         q["qid"] = f"Q{i}-{night}"
         q["profile"] = profile
+        if q["section"] not in ("note_decay", "note_duplicate"):
+            q["provider"] = provider.name
         q["answer"] = None
         if q["section"] == "new_candidate":
             q["status"] = GENERATED  # outside max_questions: the agent asks about one at most
@@ -233,6 +199,51 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
         shown += 1
         q["status"] = GENERATED if shown <= max_questions else DEFERRED
     return qs, skipped
+
+
+def note_of(hits: list[dict], notes: list):
+    """The Claude Code note a conflict's memory entry was cut from (its preview is the start of a chunk of it)."""
+    def flat(t):
+        return " ".join((t or "").split())
+    for hit in hits:
+        entry = flat(hit.get("entry")).rstrip("…").strip()
+        if len(entry) < 20:
+            continue
+        for n in notes:
+            if entry in flat(n.text):
+                return n
+    return None
+
+
+PAIRS_FILE = "note-pairs.json"  # in a profile's state: pairs of notes a person kept both of (digests only)
+
+
+def pair_key(a: str, b: str) -> str:
+    return hashlib.sha256("\x00".join(sorted([entry_key(a), entry_key(b)])).encode("utf-8")).hexdigest()[:32]
+
+
+def pair_rests(state_dir: Path, key: str) -> bool:
+    data = read_json(state_dir / PAIRS_FILE, {})
+    return isinstance(data, dict) and key in data
+
+
+def answer_pair(state_dir: Path, q: dict, answered: bool) -> None:
+    """Record (or, on undo, drop) a "keep both": the same two texts are not offered again."""
+    if q.get("section") != "note_duplicate" or not q.get("pair"):
+        return
+    data = read_json(state_dir / PAIRS_FILE, {}) or {}
+    data = data if isinstance(data, dict) else {}
+    if answered and q.get("answer") == "keep-both":
+        data[q["pair"]] = {"at": datetime.now().astimezone().isoformat(timespec="seconds")}
+    else:
+        data.pop(q["pair"], None)
+    write_json(state_dir / PAIRS_FILE, data)
+
+
+def fact_ids(q: dict) -> set[int]:
+    """Every fact a question names: its own, a merge's two, a note's duplicate."""
+    ids = {q.get("fact_id")} | {(q.get(s) or {}).get("fact_id") for s in ("keep", "copy", "fact")}
+    return {i for i in ids if isinstance(i, int)}
 
 
 # -- between nights ------------------------------------------------------------------------------------------------
@@ -388,9 +399,15 @@ def find(doc: dict, qid: str) -> dict:
     raise KeyError(f"no question {qid} in the night of {doc.get('generated_at')}")
 
 
+def answers(q: dict) -> dict:
+    """{answer: action} a question takes: what its store can carry out (``later`` is always taken too)."""
+    return providers.for_question(q).answers(q["section"])
+
+
 def decide(q: dict, answer: str, text: str | None = None) -> dict:
-    """Record the person's *answer*; returns what to do: ``{"call": {...}, "check": {...}}`` for a memory tool call,
-    ``{"local": "reject" | "not-duplicates"}`` for the engine's reject list, ``{}`` when nothing is to be done."""
+    """Record the person's *answer*; returns what to do: ``{"call": {...}, "check": {...}}`` for a memory tool call
+    (``"calls"``: several, in that order; ``"edit"``: a change of a file the agent makes), ``{"local": "reject" |
+    "not-duplicates"}`` for the engine's reject list, ``{}`` when nothing is to be done."""
     answer = answer.strip().lower()
     if q.get("status") == GONE:
         raise ValueError(f"{q['qid']} is gone: its message changed or went since the night; nothing to answer")
@@ -399,39 +416,53 @@ def decide(q: dict, answer: str, text: str | None = None) -> dict:
     if answer == LATER:
         q["status"], q["answer"] = SHOWN, None
         return {}
-    table = ANSWERS[q["section"]]
+    writer = providers.for_question(q)
+    table = writer.answers(q["section"])
     if answer not in table:
         raise ValueError(f"{q['qid']} ({q['section']}) takes: {', '.join([*table, LATER])}")
     if q.get("status") in CLOSED:
         raise ValueError(f"{q['qid']} is already {q['status']} ({q.get('answer')}); 'dreamem undo {q['qid']}' first")
     action = table[answer]
     if action is REJECT:
-        # "Never ask again" is also "this fact is not useful": recall should stop offering it too (the engine would ask
-        # for this very call as `trust_feedback` the next night).
-        call, todo = _feedback("unhelpful")(q, text), {"local": REJECT}
+        made, todo = writer.reject_call(q), {"local": REJECT}
     elif action is NOT_DUPLICATES:
-        call, todo = None, {"local": NOT_DUPLICATES}
+        made, todo = None, {"local": NOT_DUPLICATES}
     elif action is NOTHING:
-        call, todo = None, {}
+        made, todo = None, {}
     else:
-        call, todo = action(q, text), {}  # raises before anything is recorded when the answer lacks its text
+        made, todo = action(q, text), {}  # raises before anything is recorded when the answer lacks its text
     q["answer"], q["text"] = answer, text
     q["decided_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
     q["status"] = DECIDED
-    q["call"] = call
-    if call is None:
+    for k in ("call", "calls", "edit"):
+        q.pop(k, None)
+    q["call"] = None
+    if made is None:
         return todo
-    if call["tool"] != "memory_merge" and q.get("version_id") is not None:
-        # The store refuses the write when the fact is no longer at the version shown (holographic-memory 0.5.0+;
-        # an older one ignores the argument and writes unchecked).
-        call["args"]["expect"] = {str(q.get("fact_id")): q["version_id"]}
-    return {**todo, "call": call, "check": {"database": q.get("store")}}
+    if isinstance(made, dict) and "edit" in made:
+        q["edit"] = made["edit"]
+        return {**todo, "edit": made["edit"], "check": writer.check(q)}
+    if isinstance(made, list):
+        q.pop("call")
+        q["calls"] = [writer.finish(q, c) for c in made]
+        return {**todo, "calls": q["calls"], "check": writer.check(q)}
+    q["call"] = writer.finish(q, made)
+    return {**todo, "call": q["call"], "check": writer.check(q)}
+
+
+def to_apply(q: dict) -> bool:
+    """Whether a decided question has something for the agent to make: a call, calls or an edit."""
+    return bool(q.get("call") or q.get("calls") or q.get("edit"))
 
 
 def applied(q: dict, result: str | None = None, fact_id: int | None = None) -> None:
-    if q.get("status") != DECIDED or not q.get("call"):
+    if q.get("status") != DECIDED or not to_apply(q):
         raise ValueError(f"{q['qid']} has no decided call to mark applied (status {q.get('status')})")
     q["status"], q["result"] = APPLIED, result
+    if (q.get("edit") or {}).get("action") == "delete":
+        # The note is gone at the person's word: its text leaves this file too (path and name stay, to say which).
+        for k in ("content", "other_content", "conflicts", "why"):
+            q.pop(k, None)
     if q.get("section") == "new_candidate":
         # The fact now lives in memory; the person's words leave this file: only the new fact's id stays (so a forget
         # can find it), not the text, the call or what the tool answered.
@@ -439,7 +470,10 @@ def applied(q: dict, result: str | None = None, fact_id: int | None = None) -> N
         drop_words(q)
 
 
-WORDS = ("text", "call", "result", "failure")  # what of a candidate may hold words: the fact, the call, tool answers
+WORDS = ("text", "call", "calls", "edit", "result", "failure")
+# What of a question may hold a forgotten fact's text: removed when the fact is forgotten (or deleted) since.
+FACT_WORDS = ("content", "keep", "copy", "why", "conflicts", "call", "calls", "edit", "text", "result", "note", "outcome",
+              "locator", "fact", "other", "other_content")  # what of a candidate may hold words: the fact, the call, tool answers
 
 
 def drop_words(q: dict) -> None:
@@ -459,7 +493,7 @@ def failed(q: dict, reason: str) -> None:
 
 def undo(q: dict) -> None:
     """Cancel the recorded decision (memory is not touched: a call already made is undone with memory_revert)."""
-    for k in ("answer", "text", "call", "decided_at", "result", "failure"):
+    for k in ("answer", "text", "call", "calls", "edit", "decided_at", "result", "failure"):
         q.pop(k, None)
     q["answer"] = None
     q["status"] = SHOWN

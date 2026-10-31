@@ -41,7 +41,8 @@ class World:
     def __init__(self, root: Path, *, store: bool = True, scope: str = "global"):
         self.root = Path(root)
         self.env = {"DREAMEM_HOME": str(self.root / "dreaming"), "CLAUDE_CONFIG_DIR": str(self.root / "claude"),
-                    "CODEX_HOME": str(self.root / "codex"), "HOLOMEM_HOME": str(self.root / "holo")}
+                    "CODEX_HOME": str(self.root / "codex"), "HOLOMEM_HOME": str(self.root / "holo"),
+                    "DREAMEM_GEMINI_DIR": str(self.root / "gemini")}
         self.homes = homes(self.env)
         for p in (self.homes.claude / "projects", self.homes.codex / "sessions", self.homes.holomem):
             p.mkdir(parents=True, exist_ok=True)
@@ -203,7 +204,7 @@ class World:
     # -- after a pass ----------------------------------------------------------------------------------------------
     def tree(self, *roots) -> dict:
         """{relative path: sha256} of every file under *roots* (default: the homes the pass may only read)."""
-        roots = roots or (self.homes.claude, self.homes.codex, self.homes.holomem, self.project)
+        roots = roots or (self.homes.claude, self.homes.codex, self.homes.holomem, self.homes.gemini, self.project)
         out = {}
         for root in roots:
             for p in sorted(Path(root).rglob("*")):

@@ -55,6 +55,9 @@ def reference(key: bytes, m: Message) -> dict:
     return ref
 
 
+READABLE = (src_claude.CLIENT, src_codex.CLIENT)  # clients whose session a reference can be resolved in
+
+
 def resolve(homes: Homes, key: bytes, ref: dict) -> Message | None:
     """The message *ref* names, read again now, or None when it is no longer there as it was."""
     try:

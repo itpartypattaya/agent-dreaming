@@ -1,6 +1,6 @@
 ---
 name: dream
-description: Go through last night's memory questions of agent-dreaming with the person — duplicates to merge, facts that may be outdated or wrong, facts an agent stored that nobody confirmed, Claude Code memory notes nobody mentioned lately — and apply each answer through the holographic-memory tools, only on the person's word. Use when the person says "dream", "dreaming", "memory questions", "разбери сон", "вопросы по памяти", or when a session starts with a line "Dreaming <date>: N memory questions wait" and the person wants to go through them. Also to run the pass by hand ("сделай проход сейчас", "run dreaming now").
+description: Go through last night's memory questions of agent-dreaming with the person — duplicates to merge, facts that may be outdated or wrong, facts an agent stored that nobody confirmed, Claude Code memory notes nobody mentioned lately or that repeat what is kept — and apply each answer through the memory system's own tools (holographic-memory, MCP memory) or an edit of the Claude Code note, only on the person's word. Use when the person says "dream", "dreaming", "memory questions", "разбери сон", "вопросы по памяти", or when a session starts with a line "Dreaming <date>: N memory questions wait" and the person wants to go through them. Also to run the pass by hand ("сделай проход сейчас", "run dreaming now").
 ---
 
 # Dreaming: the review
@@ -17,8 +17,9 @@ It changed nothing. Your job here is to put the questions to the person and carr
    carry one answer over to another question. "Not now" is a fine answer (`later`).
 3. **One question at a time**, in the person's language, with the texts exactly as shown (never shorten a text of a
    "merge?" question: the person decides on the two whole texts). Up to 7 a session; the rest wait for another night.
-4. **Write only through the call `dreamem decide` prints**, after its checks. Never `memory_forget` unless the person
-   said to forget it. Never edit Claude Code memory notes, CLAUDE.md, AGENTS.md or Codex memory files in this review.
+4. **Write only what `dreamem decide` prints**, after its checks. Never `memory_forget` unless the person said to
+   forget it. A Claude Code memory note is edited only as printed (`edit`) and only after `dreamem verify` says `ok`.
+   Never edit CLAUDE.md, AGENTS.md or Codex memory files in this review.
 
 ## Procedure
 
@@ -27,7 +28,9 @@ It changed nothing. Your job here is to put the questions to the person and carr
 2. For each question, ask it plainly. Sections and the answers each takes:
    - `duplicate` [D-n] — two facts look like one: **yes** (merge) / **not-duplicates**.
    - `conflict` — a fact contradicts what memory says: **changed** (the new state, give `--text`) / **outdated** /
-     **wrong** (give the right text in `--text`) / **keep**.
+     **wrong** (give the right text in `--text`) / **keep**. When the other side is a Claude Code note (named in the
+     question), the note may be the stale one: **note-changed** (`--text`: the note's new text) / **note-outdated**
+     (deletes the note).
    - `fact_decay` — not mentioned for long: **keep** / **outdated** / **changed** / **wrong** / **forget**.
    - `outcome` — an agent reported in holographic-memory's journal that an answer using this fact went wrong
      (corrected, or a dead end). It is the agent's report, not the person's word: say so, show the correction
@@ -39,8 +42,10 @@ It changed nothing. Your job here is to put the questions to the person and carr
    - `promotion` — people keep saying it: **yes** (mark confirmed) / **no** / **outdated** / **forget**.
    - `confirm` — said again on different days: **yes** / **no**.
    - `trust_feedback` — rejected earlier, still recalled: **yes** (lower its trust) / **no**.
-   - `note_decay` — a Claude Code memory note nobody mentioned lately: **keep** / **outdated**. Nothing is written:
-     tell the person the note's name and project; they can delete or fix it themselves or in a session of that project.
+   - `note_duplicate` — a Claude Code memory note says what another note or a fact already says: **drop-note**
+     (deletes the first note named) / **keep-both** (not asked again while both say what they say).
+   - `note_decay` — a Claude Code memory note nobody mentioned lately: **keep** / **outdated** (deletes the note: a
+     note has no history, say so) / **changed** (`--text`: the note's new text).
    - `new_candidate` — a possible new fact: a clause the person said (shown with its message, read again from the
      session file). **Judge each one yourself before showing anything**; show the person only what passes, and ask
      about one at most per review. A fact only if all hold: lasting (true in a month: a trait, relationship, place,
@@ -56,11 +61,23 @@ It changed nothing. Your job here is to put the questions to the person and carr
    so an answer never lands on a question of a newer night): `dreamem decide Q3-7f2a <answer> [--text "..."]`. A
    `--text` holding a secret or an instruction is refused — ask the person to say it without it. It prints one of:
    - nothing to call → done with this question;
-   - a JSON with `call` (`tool` + `args`) and `check` → go on to 4.
+   - a JSON with `call` (`tool` + `args`), or `calls` (several: make them in that order), and `check` → go on to 4;
+   - a JSON with `edit` (a Claude Code note) → go on to 4a.
 4. Check, right before the call: `memory_stats` — its `database` must be the same file as `check.database`.
    Otherwise stop: this session's store is another one (a per-project store); tell the person to answer it in a
    session of that project. A call that changes a fact carries `expect` (the version the person was shown): the store
    refuses it when the fact changed since the night.
+4a. An `edit`: run `dreamem verify Q3-7f2a` first. `changed` → stop, the question comes back with the note as it is
+   now. `ok` → at once, with your file tools, always as an exact replacement of the text you just read (it fails if
+   the file changed — then stop and `dreamem failed`): `replace-body` — the note's body (everything after its
+   frontmatter) becomes `edit.text`, and its frontmatter `description` becomes `edit.description`; `delete` — first
+   replace the whole body with nothing the same way, then delete the file `edit.path` and the line of `edit.index`
+   (MEMORY.md) that links `edit.index_entry`. Touch nothing else. Then step 5 as for a call.
+4b. A call of the MCP `memory` server (`delete_observations`, `add_observations`): the memory server of this session
+   must be configured with `MEMORY_FILE_PATH` = `check.memory_file` (see its MCP config); `check.observation`, when
+   given, must be in `open_nodes` of `check.entity` word for word; otherwise stop. A saved fact there has no id:
+   `dreamem applied Q` without `--fact-id`. A `delete_observations` reply "Deleted 0 of …" is
+   a failure (the text was not there).
 5. Make exactly the printed call (same tool, same arguments). Then:
    - success → `dreamem applied Q3-7f2a --result '<short summary of the answer>'`;
    - refused (`changed_since`, not found, any error) → `dreamem failed Q3-7f2a --reason '<what it said>'`, and tell the person
@@ -72,12 +89,13 @@ It changed nothing. Your job here is to put the questions to the person and carr
 
 ## When the memory tools are missing
 
-Without holographic-memory in this session (no `memory_*` tools): you can still record answers with `dreamem decide`,
-but no call can be made — tell the person the store is not connected here and leave the questions open (`later`).
+Without the question's memory system in this session (no `memory_*` tools for holographic-memory, no
+`delete_observations` for the MCP `memory` server): you can still record answers with `dreamem decide`, but no call
+can be made — tell the person the store is not connected here and leave the questions open (`later`).
 
 ## Commands
 
-`dreamem show` · `dreamem decide <Q> <answer> [--text T]` · `dreamem applied <Q>` · `dreamem failed <Q> --reason R` ·
+`dreamem show` · `dreamem decide <Q> <answer> [--text T]` · `dreamem verify <Q>` · `dreamem applied <Q>` · `dreamem failed <Q> --reason R` ·
 `dreamem undo <Q>` · `dreamem list` · `dreamem run` · `dreamem status` · `dreamem forget-sweep` (after a `memory_forget`:
 removes the fact from the dream's own copies) · `dreamem config time HH:MM|any` (when the pass runs; the person's
 choice, never yours). With several profiles (per-project stores) add `--profile <name>` when

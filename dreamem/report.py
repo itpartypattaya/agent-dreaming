@@ -17,6 +17,7 @@ SECTION_TITLE = {
     "confirm": "said again on different days — mark as confirmed?",
     "trust_feedback": "rejected earlier, still recalled — lower its trust?",
     "note_decay": "a Claude Code memory note nobody mentioned lately — still relevant?",
+    "note_duplicate": "a Claude Code memory note says what is already kept — drop it?",
     "new_candidate": "something the person said that memory may not hold — a new fact?",
 }
 
@@ -42,6 +43,14 @@ def question_text(q: dict) -> str:
         return line
     if s == "new_candidate":  # no words here: the review reads the clause again from the session file
         return f"{q['qid']} said on {q.get('days', 1)} day(s) — {SECTION_TITLE[s]} (shown in the review)"
+    if s == "note_duplicate":
+        note = q["note"]
+        if q.get("other"):
+            other = f"note '{q['other']['name']}' of {q['other']['project']}: {_q(q.get('other_content'), 300)}"
+        else:
+            other = f"fact #{(q.get('fact') or {}).get('fact_id')}: {_q((q.get('fact') or {}).get('content'), 300)}"
+        return (f"{q['qid']} note '{note['name']}' of {note['project']}: {_q(q.get('content'), 300)} and {other} — "
+                f"{SECTION_TITLE[s]}")
     if s == "note_decay":
         note = q["note"]
         return (f"{q['qid']} note '{note['name']}' of project {note['project']}: {_q(q.get('content'), 160)} — "
@@ -50,6 +59,8 @@ def question_text(q: dict) -> str:
     if s == "conflict" and q.get("conflicts"):
         other = q["conflicts"][0]
         line += f" Memory: {_q(other.get('entry') or other.get('content'), 200)}"
+        if q.get("note"):
+            line += f" (Claude Code note '{q['note']['name']}' of {q['note']['project']})"
     if q.get("why") and s in ("review", "promotion", "fact_decay"):
         line += f" ({q['why']})"
     if s == "outcome" and q.get("outcome"):
@@ -107,6 +118,9 @@ def render(doc: dict) -> str:
     if done:
         lines += ["", f"Answered: {', '.join(q['qid'] + ' ' + str(q['answer']) for q in done)}."]
     notes = []
+    if doc.get("store_coverage"):
+        notes.append(f"- the store was read only in part ({', '.join(doc['store_coverage'].get('problems') or [])}): "
+                     "no \"still true?\" question tonight")
     for a in doc.get("alerts") or []:
         notes.append(f"- {a.get('kind')}: {a.get('message', '')[:300]}")
     for p in doc.get("index_pressure") or []:
@@ -139,10 +153,11 @@ def summary_line(entries: dict) -> str | None:
     parts = []
     for name, keys in (("duplicate", ("duplicate",)),
                        ("fact", ("conflict", "outcome", "fact_decay", "review", "new_fact", "promotion", "confirm", "trust_feedback")),
-                       ("note", ("note_decay",)), ("possible new fact", ("new_candidate",))):
+                       ("note", ("note_decay", "note_duplicate")), ("possible new fact", ("new_candidate",))):
         n = sum(kinds.get(k, 0) for k in keys)
         if n:
             parts.append(f"{n} {name}{'s' if n != 1 else ''}")
     return (f"Dreaming {day}: {total} memory question{'s' if total != 1 else ''} wait for the person "
             f"({', '.join(parts)}). If they want to go through them: /agent-dreaming:dream in Claude Code, "
-            f"$dreaming in Codex. Do not bring it up again in this session unless asked.")
+            f"$dreaming in Codex, the skill dreaming in Antigravity. Do not bring it up again in this session unless "
+            f"asked.")
