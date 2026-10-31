@@ -12,6 +12,11 @@ added. Codex runs a hook only once it is trusted: open ``/hooks`` in Codex and t
 Both ask for the time of the pass when none is chosen: ``install codex`` in a terminal, the plugin through the agent
 in the first session (the SessionStart hook asks it to).
 
+Antigravity: the skill ``dreaming`` in ``~/.gemini/config/skills/dreaming/`` and two named SessionStart hooks in
+``~/.gemini/config/hooks.json`` (the global customization root of agy 1.4.3): one tells the agent how many questions
+wait, the other starts tonight's pass detached (a hook there has 30 seconds and no background mode). Other hooks in
+that file are kept as they are; ``--uninstall`` removes only ours.
+
 Schedule (optional): a daily run at the chosen time (04:00 if none) that catches up after sleep — Task Scheduler on
 Windows (``StartWhenAvailable``), launchd on macOS, a systemd user timer with ``Persistent=true`` on Linux. ``--dry-run`` prints it.
 """
@@ -222,7 +227,18 @@ def install_codex(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdout, 
         print(f"{path}: the result would not parse ({exc}); nothing was changed", file=out)
         return 1
     written = _write(path, old, new, dry_run, out)
-    skill = Path.home() / ".agents" / "skills" / "dreaming" / "SKILL.md"
+    _skill(Path.home() / ".agents" / "skills" / "dreaming" / "SKILL.md", remove=remove, dry_run=dry_run, out=out)
+    if not remove and not dry_run:
+        ask_time(homes, prompt, out)
+    before = _our_hooks(old)
+    if written and not remove and (before is None or before != _our_hooks(new)):
+        # Trust is kept per hook by its definition and its place: only new, rewritten or moved hooks need it again.
+        print("Codex runs a hook only once it is trusted: open /hooks in Codex and trust the two dreaming hooks.",
+              file=out)
+    return 0
+
+
+def _skill(skill: Path, *, remove: bool, dry_run: bool, out) -> None:
     old_skill = skill.read_text(encoding="utf-8", errors="replace") if skill.exists() else ""
     if old_skill and SKILL_MARK not in old_skill:
         # Another skill of that name (hermes-dreaming has one): never overwritten, never removed.
@@ -238,13 +254,64 @@ def install_codex(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdout, 
         print(f"{'would remove' if dry_run else 'removed'}: {skill}", file=out)
     else:
         _write(skill, old_skill, skill_text("dreaming"), dry_run, out)
+
+
+AG_HOOKS = ("agent-dreaming", "agent-dreaming-pass")  # our named hooks in Antigravity's hooks.json
+
+
+def cmd_command(*args: str) -> str:
+    """For ``cmd /c`` (Antigravity on Windows) or ``sh -c``: the interpreter quoted, ``-I``."""
+    python = str(Path(sys.executable)) if sys.platform == "win32" else python_path()
+    return " ".join([f'"{python}"', "-I", "-m", "dreamem", *args])
+
+
+def ours(entry) -> bool:
+    """A named hook we wrote: every handler runs our session-start hook for Antigravity."""
+    handlers = entry.get("SessionStart") if isinstance(entry, dict) else None
+    return bool(handlers) and set(entry) == {"SessionStart"} and all(
+        isinstance(h, dict) and "-m dreamem hook session-start --client antigravity" in str(h.get("command"))
+        for h in handlers)
+
+
+def antigravity_hooks(current: dict, *, remove: bool = False) -> dict:
+    """*current* with our two named hooks (re)written or, with *remove*, gone. A hook of one of our names that is not
+    ours raises ValueError: it is never overwritten or removed."""
+    foreign = [k for k in AG_HOOKS if k in current and not ours(current[k])]
+    if foreign:
+        raise ValueError(f"a hook named {', '.join(foreign)} that is not ours is there")
+    out = {k: v for k, v in current.items() if k not in AG_HOOKS}
+    if not remove:
+        for name, extra, timeout in ((AG_HOOKS[0], [], 10), (AG_HOOKS[1], ["--async"], 10)):
+            out[name] = {"SessionStart": [{"type": "command", "timeout": timeout,
+                                           "command": cmd_command("hook", "session-start", "--client", "antigravity",
+                                                                  *extra)}]}
+    return out
+
+
+def install_antigravity(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdout, prompt=_interactive) -> int:
+    root = homes.gemini / "config"
+    path = root / "hooks.json"
+    old = path.read_text(encoding="utf-8") if path.exists() else ""
+    try:
+        current = json.loads(old) if old.strip() else {}
+    except ValueError as exc:
+        print(f"{path}: not JSON ({exc}); nothing was changed", file=out)
+        return 1
+    if not isinstance(current, dict):
+        print(f"{path}: not a JSON object; nothing was changed", file=out)
+        return 1
+    try:
+        hooks = antigravity_hooks(current, remove=remove)
+    except ValueError as exc:
+        print(f"{path}: {exc} — nothing was changed", file=out)
+        return 1
+    new = json.dumps(hooks, ensure_ascii=False, indent=2) + "\n" if hooks or old else ""
+    if remove and not hooks and old:
+        new = "{}\n"
+    _write(path, old, new, dry_run, out)
+    _skill(root / "skills" / "dreaming" / "SKILL.md", remove=remove, dry_run=dry_run, out=out)
     if not remove and not dry_run:
         ask_time(homes, prompt, out)
-    before = _our_hooks(old)
-    if written and not remove and (before is None or before != _our_hooks(new)):
-        # Trust is kept per hook by its definition and its place: only new, rewritten or moved hooks need it again.
-        print("Codex runs a hook only once it is trusted: open /hooks in Codex and trust the two dreaming hooks.",
-              file=out)
     return 0
 
 

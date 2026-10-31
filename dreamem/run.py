@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from datetime import time as dtime
 from pathlib import Path
 
-from . import candidates, config, notes, questions, report, screen, store
+from . import candidates, config, engineapi, notes, providers, questions, report, screen
 from .engineapi import engine_config, run_night
 from .engineapi import forget_sweep as engine_forget_sweep
 from .fsutil import read_json, remove_partials, write_json, write_private
@@ -28,6 +28,7 @@ from .paths import Homes
 from .sources import COMPLETE
 from .sources import claude_code as src_claude
 from .sources import codex as src_codex
+from .sources import gemini as src_gemini
 
 
 CLAUDE_CACHE = "claude-lines.json"  # positions of the lines a pass reads, never their words
@@ -98,20 +99,31 @@ def gather(homes: Homes, settings: dict, now: float, *, keep: bool = True) -> di
         got, cov = src_codex.read(homes.codex_session_dirs(), since, now)
         msgs += got
         coverage["codex"] = cov.as_dict()
+    if "antigravity" in clients:
+        got, cov = src_gemini.read_antigravity(homes.gemini, since, now)
+        msgs += got
+        coverage["antigravity"] = cov.as_dict()
+    if "gemini-cli" in clients:
+        got, cov = src_gemini.read_gemini(homes.gemini, since, now)
+        msgs += got
+        coverage["gemini-cli"] = cov.as_dict()
     kept, screened = screen.messages(msgs, int(settings.get("max_message_chars", 2000)))
     projects = _Projects()
     for m in kept:
         projects(m)
-    auto, pressure, problems = notes.auto_memory(homes.claude_auto_memory_dirs()) if "claude-code" in clients \
-        else ([], [], [])
+    auto_dirs = homes.claude_auto_memory_dirs() + homes.claude_agent_memory_dirs(projects.roots())
+    auto, pressure, problems = notes.auto_memory(auto_dirs) if "claude-code" in clients else ([], [], [])
     codex_notes, codex_problems = notes.codex_memory(homes.codex_memory_dirs()) if "codex" in clients else ([], [])
     auto, auto_screened = screen.notes(auto)
     codex_notes, codex_secret = screen.dedupe_targets(codex_notes)
     instr, instr_secret = screen.dedupe_targets(
-        notes.instructions(notes.instruction_files(homes.claude, homes.codex, projects.roots())))
+        notes.instructions(notes.instruction_files(homes.claude, homes.codex, projects.roots(), homes.gemini)))
     return {"messages": kept, "coverage": coverage, "screened": screened, "projects": projects,
             "auto": auto, "pressure": pressure, "codex_notes": codex_notes, "instructions": instr,
             "notes_ok": not problems and not codex_problems,
+            "notes_problems": problems + codex_problems,
+            "notes_elsewhere": [str(p) for p in homes.claude_moved_notes(projects.roots())]
+            if "claude-code" in clients else [],
             "notes_screened": {**auto_screened, "dedupe_secret_paragraphs": codex_secret + instr_secret}}
 
 
@@ -156,12 +168,16 @@ def pass_profile(pdir: Path, profile: config.Profile, settings: dict, tz: str, d
     if profile.project_key:
         msgs = [m for m in msgs if project_of(m) == profile.project_key]
     auto = data["auto"] if profile.notes else []
-    cfg = engine_config(store=profile.store, settings=settings, tz=tz, min_trust=profile.min_trust)
+    prov = providers.get(profile.provider, profile.store, state_dir)
     try:
+        external = prov.facts()  # None: holographic-memory, which the engine reads itself
+        cfg = engine_config(store=profile.store, settings=settings, tz=tz, min_trust=profile.min_trust,
+                            external=external is not None)
         result, entries = run_night(state_dir=state_dir, config=cfg, notes=[n.text for n in auto],
                                     dedupe=[n.text for n in data["codex_notes"] + data["instructions"]],
                                     messages=[_message(m) for m in msgs], acks=acks,
-                                    windows=settings.get("windows") or {})
+                                    windows=settings.get("windows") or {}, facts=external,
+                                    gone=prov.gone() if external is not None else None)
     except Exception as exc:  # noqa: BLE001 - one profile's failure is reported; the others still run
         return {"error": f"engine failed: {type(exc).__name__}: {str(exc)[:300]}"}
     by_text = {}
@@ -172,31 +188,46 @@ def pass_profile(pdir: Path, profile: config.Profile, settings: dict, tz: str, d
         note = by_text.get(entry.strip())
         if note is not None:
             index[i] = {"id": note.id, "project": note.project, "path": note.path, "name": note.name,
-                        "entry_key": questions.entry_key(entry)}
-    coverage_ok = all(c["status"] == COMPLETE for c in data["coverage"].values()) and data["notes_ok"]
+                        "sha256": note.sha256, "entry_key": questions.entry_key(entry)}
+    coverage = data["coverage"]
+    store_cov = prov.coverage()  # the store itself read only in part (a line cut off): no "still true?" tonight
+    coverage_ok = all(c["status"] == COMPLETE for c in coverage.values()) and data["notes_ok"] and not store_cov
     ids = {i.get("fact_id") for k in ("promotions", "new_facts", "confirm", "trust_feedback", "fact_decays", "conflicts")
            for i in result.get(k) or []}
-    wrong = store.went_wrong(profile.store)
-    facts = store.facts_state(profile.store, ids | {w["fact_id"] for w in wrong})
+    wrong = prov.went_wrong()
+    facts = prov.heads(ids | {w["fact_id"] for w in wrong})
     rejected = read_json(state_dir / "rejected.json", {}) or {}
     offered = []
     limit = int(settings.get("max_candidates", 10))
-    if profile.store is not None and limit > 0 and data.get("salt"):
+    if profile.store is not None and limit > 0 and data.get("salt") and "save" in prov.answers("new_candidate"):
         excluded = candidates.exclusions(settings)
-        found = candidates.find([m for m in msgs if not any(p.search(m.text) for p in excluded)],
-                                store.current_texts(profile.store), data["salt"])
+        # Only sessions the review can read again (it shows the clause from the session file, never from here).
+        found = candidates.find([m for m in msgs if m.client in candidates.READABLE
+                                 and not any(p.search(m.text) for p in excluded)],
+                                prov.current_texts(), data["salt"])
         offered = [c for c in found if not questions.candidate_rests(state_dir, c["clause"])][:limit]
+    pairs = []
+    if profile.notes:
+        # A fact holding a secret or an instruction to an agent is never paired: its text would be kept and shown.
+        facts_now = [(i, t) for i, t in (prov.current_facts() if profile.store is not None else [])
+                     if not engineapi.classify(t)]
+        for pair in notes.note_pairs(auto, facts_now):
+            other = pair.get("other_note")
+            pair["key"] = questions.pair_key(pair["note"].text, other.text if other else pair["fact"]["content"])
+            if not questions.pair_rests(state_dir, pair["key"]):
+                pairs.append(pair)
     qs, skipped = questions.build(result, store=str(profile.store) if profile.store else None, facts=facts,
                                   notes_index=index, coverage_ok=coverage_ok,
                                   max_questions=int(settings.get("max_questions", 7)), profile=profile.name,
                                   night_tag=uuid.uuid4().hex[:4], went_wrong=wrong,
                                   answered=questions.outcomes_answered(state_dir),
-                                  rejected=set(rejected) if isinstance(rejected, dict) else set(), candidates=offered)
+                                  rejected=set(rejected) if isinstance(rejected, dict) else set(), candidates=offered,
+                                  provider=prov, note_pairs=pairs, notes=auto)
     alerts = [a for a in result.get("alerts") or []
               if coverage_ok or a.get("kind") not in ("memory_loss", "entry_truncated", "probe_missing")]
-    doc = {"generated_at": result["generated_at"], "profile": profile.name,
-           "store": str(profile.store) if profile.store else None, "coverage": data["coverage"],
-           "stats": result.get("stats") or {}, "questions": qs, "skipped": skipped, "alerts": alerts,
+    doc = {"generated_at": result["generated_at"], "profile": profile.name, "provider": prov.name,
+           "store": str(profile.store) if profile.store else None, "coverage": coverage,
+           "store_coverage": store_cov, "stats": result.get("stats") or {}, "questions": qs, "skipped": skipped, "alerts": alerts,
            "index_pressure": data["pressure"] if profile.notes else [],
            "screened": {**data["screened"], **{f"note_{k}": v for k, v in data["notes_screened"].items()}},
            "reopened": reopened, "acknowledged": bool(acks)}
@@ -206,7 +237,8 @@ def pass_profile(pdir: Path, profile: config.Profile, settings: dict, tz: str, d
     sections = questions.open_sections(qs)
     return {"generated_at": doc["generated_at"], "published": time.time(), "open": sum(sections.values()),
             "sections": sections,
-            "coverage": {k: v["status"] for k, v in data["coverage"].items()}}
+            "coverage": {k: v["status"] for k, v in coverage.items()}
+            | ({prov.name: store_cov["status"]} if store_cov else {})}
 
 
 def run(homes: Homes, *, if_due: bool = False, dry_run: bool = False, only: list[str] | None = None,
@@ -261,6 +293,7 @@ def run(homes: Homes, *, if_due: bool = False, dry_run: bool = False, only: list
         if dry_run:
             return 1 if failed else 0
         summary["profiles"] = entries
+        summary["notes"] = {"problems": data["notes_problems"], "elsewhere": data["notes_elsewhere"]}
         if not failed:
             summary["last_success"] = datetime.now().astimezone().isoformat(timespec="seconds")
         write_json(homes.summary, summary)
@@ -287,13 +320,12 @@ def forget_sweep(homes: Homes, out=sys.stdout) -> int:
             doc = read_json(pdir / "questions.json")
             if not doc:
                 continue
-            gone = store.forgotten(Path(doc["store"])) if doc.get("store") else set()
+            prov = providers.get(doc.get("provider"), doc.get("store"), pdir / "state")
+            gone = prov.gone() if doc.get("store") else set()
             scrubbed = 0
             for q in doc["questions"]:
-                ids = {q.get("fact_id")} | {(q.get(s) or {}).get("fact_id") for s in ("keep", "copy")}
-                if gone & {i for i in ids if isinstance(i, int)}:
-                    for k in ("content", "keep", "copy", "why", "conflicts", "call", "text", "result", "note",
-                              "outcome"):
+                if gone & questions.fact_ids(q):
+                    for k in questions.FACT_WORDS:
                         q.pop(k, None)
                     q["failure"] = "forgotten"
                     if q["status"] in questions.OPEN:
@@ -305,9 +337,13 @@ def forget_sweep(homes: Homes, out=sys.stdout) -> int:
             if gone & _fact_ids(read_json(pdir / "dream.json", {})):
                 # The night's output holds facts that never became a question too: removed whole, it is a record.
                 (pdir / "dream.json").unlink(missing_ok=True)
-            if doc.get("store"):
+            if doc.get("store") and prov.name == providers.DEFAULT:  # the engine's own sweep reads the store
                 cfg = engine_config(store=Path(doc["store"]), settings={}, tz="UTC", min_trust=None)
                 problems += bool(engine_forget_sweep(state_dir=pdir / "state", config=cfg).get("errors"))
+            elif doc.get("store"):  # another system: what it no longer holds, swept from the engine's copies
+                cfg = engine_config(store=None, settings={}, tz="UTC", min_trust=None, external=True)
+                problems += bool(engine_forget_sweep(state_dir=pdir / "state", config=cfg, tombstones=gone,
+                                                     facts=prov.facts() or []).get("errors"))
             print(f"{pdir.name}: {scrubbed} question(s) scrubbed", file=out)
         return 1 if problems else 0
 
@@ -325,10 +361,19 @@ def status(homes: Homes, out=sys.stdout) -> int:
         entry = (summary.get("profiles") or {}).get(p.name) or {}
         err = f" — error: {entry['error']}" if entry.get("error") else ""
         cov = ", ".join(f"{k} {v}" for k, v in (entry.get("coverage") or {}).items())
-        print(f"profile {p.name}: store {p.store or 'none'}; last night {entry.get('generated_at', 'never')}; "
+        kind = "" if p.provider == providers.DEFAULT else f" ({providers.get(p.provider).title})"
+        print(f"profile {p.name}{kind}: store {p.store or 'none'}; last night {entry.get('generated_at', 'never')}; "
               f"open {entry.get('open', 0)}{'; coverage ' + cov if cov else ''}{err}", file=out)
     chosen = settings.get("dream_time") or "not chosen (the first session of each day)"
     print(f"dream time: {'the first session of each day' if chosen == config.ANY_TIME else chosen}", file=out)
+    seen = summary.get("notes") or {}
+    for path in seen.get("elsewhere") or []:
+        print(f"auto memory moved by a project setting to {path} — not read (it holds only in a trusted folder)",
+              file=out)
+    for problem in seen.get("problems") or []:
+        kind, _, where = problem.partition(":")
+        print(f"memory notes: {where} — {'a format not read yet' if kind == 'unknown-format' else kind}; "
+              "coverage partial", file=out)
     print(f"last success: {summary.get('last_success', 'never')}; due now: {due(homes)}", file=out)
     for w in warnings:
         print(f"warning: {w}", file=out)

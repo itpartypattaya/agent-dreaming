@@ -1,7 +1,39 @@
 # Changelog
 
-## Unreleased
+## Unreleased (0.6.0)
 
+- Memory systems behind one seam (`dreamem/providers`): a system reads its store for the pass and says how an answer
+  becomes calls of its own tools. holographic-memory stays the reference, its 33 calls byte for byte as before
+  (`tests/fixtures/holomem-0.7.0-calls.json`, a test that fails on any change of an argument).
+- Claude Code memory notes are answered into. A note nobody mentioned: keep / **outdated** (deletes it: a note has
+  no history) / **changed**. New question `note_duplicate`: a note says what another note or a fact already says —
+  drop-note / keep-both. A `conflict` with a Claude Code note also takes note-changed / note-outdated. The agent edits
+  the note itself, after the new `dreamem verify Q` shows the file is byte for byte the one the person was shown;
+  the commands only record. Codex memories are never edited.
+- Subagents' memory is read (`~/.claude/agent-memory/*/`, a project's `.claude/agent-memory[-local]/*/`). A project's
+  `autoMemoryDirectory` is named in `dreamem status`, not read (Claude Code honours it only in a trusted folder). A
+  Codex memories folder in a shape we do not know makes the coverage partial instead of silently empty.
+- The reference MCP `memory` server (`@modelcontextprotocol/server-memory` 2.0.1) as a memory system: its JSONL file,
+  found by `MEMORY_FILE_PATH` in Claude Code's or Codex's MCP config or `[providers.mcp-memory] path`, read only.
+  Each observation is a fact with a surrogate id (`ids.json`, digests); answers are `delete_observations` by the exact
+  text and, for a change, `add_observations` then `delete_observations`; a new fact goes to the entity the agent
+  names (`decide --entity`) or `entity` in the settings. "Still true?" waits for 60 days of its own first-sighting
+  journal. The fixture and the tool schemas were taken from the server itself, run once on synthetic data.
+- Antigravity and Gemini CLI sessions are read (only what the person typed: Antigravity's `<USER_REQUEST>`, Gemini
+  CLI's text parts, not tool results); `~/.gemini/GEMINI.md` and a project's `GEMINI.md` count as already written.
+  `dreamem install antigravity` puts the review skill in `~/.gemini/config/skills/dreaming` and two named hooks in
+  `~/.gemini/config/hooks.json` (the line in Antigravity's shape; tonight's pass started detached), other hooks kept.
+- A forgotten or deleted fact's text no longer stays in a question's `locator` (found by the MCP `memory` tests).
+- Codex review of 0.6.0 before release (12 findings, all fixed; a test each, red without its fix): a fact holding a
+  secret or an instruction is never paired with a note; `forget-sweep` finds a fact inside a `note_duplicate`; an
+  observation deleted from the MCP file leaves the engine's own copies too (reject list, cooldowns, diary); a note's
+  digest is of the very bytes shown; "changed" to the same text makes no call (it would delete the fact); a saved
+  MCP observation is applied without a fact id and keeps no words; a deleted note's text leaves its question;
+  Antigravity and Gemini CLI messages raise no candidate the review could not read again; `install antigravity`
+  never touches a hook of our name that is not ours; a changed note gets its description too. The skill: a delete
+  empties the note by exact replacement first; an MCP call is made only through a server using the file the night
+  read.
+- SECURITY.md said only `memory_merge` carried `expect`; every holographic-memory write has carried it since 0.4.1.
 - `dreamem run --dry-run` keeps nothing, as it says: it reads the transcript position cache (`claude-lines.json`) but
   no longer rewrites it. Positions only, never words, but a preview should leave `~/.dreaming` as it found it.
 

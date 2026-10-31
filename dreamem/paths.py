@@ -2,7 +2,8 @@
 
 Every location can be moved by an environment variable, as the tools themselves allow:
 ``DREAMEM_HOME`` (ours, ``~/.dreaming``), ``CLAUDE_CONFIG_DIR`` (``~/.claude``), ``CODEX_HOME`` (``~/.codex``),
-``HOLOMEM_HOME`` (``~/.holographic``). Everything outside ``DREAMEM_HOME`` is read, never written.
+``HOLOMEM_HOME`` (``~/.holographic``), ``DREAMEM_GEMINI_DIR`` (``~/.gemini``: Antigravity and Gemini CLI; the name is
+ours). Everything outside ``DREAMEM_HOME`` is read, never written.
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ class Homes:
     claude: Path
     codex: Path
     holomem: Path
+    gemini: Path = Path.home() / ".gemini"
 
     @property
     def profiles(self) -> Path:
@@ -63,6 +65,31 @@ class Homes:
                 out.append(path)
         return out
 
+    def claude_agent_memory_dirs(self, project_roots=()) -> list[Path]:
+        """Subagents' memory (``memory: user | project | local``): ``agent-memory/<name>/`` here and
+        ``.claude/agent-memory[-local]/<name>/`` of each project."""
+        bases = [self.claude / "agent-memory"]
+        for root in project_roots:
+            bases += [Path(root) / ".claude" / "agent-memory", Path(root) / ".claude" / "agent-memory-local"]
+        return [p for base in bases if base.is_dir() for p in sorted(base.iterdir()) if p.is_dir()]
+
+    def claude_moved_notes(self, project_roots=()) -> list[Path]:
+        """``autoMemoryDirectory`` of a project's ``.claude/settings.json``: Claude Code honours it only in a folder
+        the person trusts, which cannot be told from here — named in the status, not read."""
+        out = []
+        for root in project_roots:
+            for name in ("settings.json", "settings.local.json"):
+                try:
+                    raw = json.loads((Path(root) / ".claude" / name).read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                moved = raw.get("autoMemoryDirectory") if isinstance(raw, dict) else None
+                if isinstance(moved, str) and moved.strip():
+                    path = Path(os.path.expandvars(moved)).expanduser()
+                    if path not in out:
+                        out.append(path)
+        return out
+
     # -- Codex --------------------------------------------------------------------------------------------------
     def codex_session_dirs(self) -> list[Path]:
         return [p for p in (self.codex / "sessions", self.codex / "archived_sessions") if p.is_dir()]
@@ -80,4 +107,5 @@ class Homes:
 def homes(env: dict | None = None) -> Homes:
     env = os.environ if env is None else env
     return Homes(dreaming=_dir(env, "DREAMEM_HOME", ".dreaming"), claude=_dir(env, "CLAUDE_CONFIG_DIR", ".claude"),
-                 codex=_dir(env, "CODEX_HOME", ".codex"), holomem=_dir(env, "HOLOMEM_HOME", ".holographic"))
+                 codex=_dir(env, "CODEX_HOME", ".codex"), holomem=_dir(env, "HOLOMEM_HOME", ".holographic"),
+                 gemini=_dir(env, "DREAMEM_GEMINI_DIR", ".gemini"))

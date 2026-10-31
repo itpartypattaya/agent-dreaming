@@ -1,0 +1,1107 @@
+{
+ "confirm/later": {
+  "answer": null,
+  "call": null,
+  "status": "shown",
+  "text": null,
+  "todo": {}
+ },
+ "confirm/no": {
+  "answer": "no",
+  "call": null,
+  "status": "decided",
+  "text": "new text",
+  "todo": {}
+ },
+ "confirm/yes": {
+  "answer": "yes",
+  "call": {
+   "args": {
+    "action": "confirmed",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_feedback"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "action": "confirmed",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_feedback"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "conflict/changed": {
+  "answer": "changed",
+  "call": {
+   "args": {
+    "content": "new text",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_change"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "content": "new text",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_change"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "conflict/keep": {
+  "answer": "keep",
+  "call": null,
+  "status": "decided",
+  "text": "new text",
+  "todo": {}
+ },
+ "conflict/later": {
+  "answer": null,
+  "call": null,
+  "status": "shown",
+  "text": null,
+  "todo": {}
+ },
+ "conflict/outdated": {
+  "answer": "outdated",
+  "call": {
+   "args": {
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_end"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_end"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "conflict/wrong": {
+  "answer": "wrong",
+  "call": {
+   "args": {
+    "content": "new text",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_correct"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "content": "new text",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_correct"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "duplicate/later": {
+  "answer": null,
+  "call": null,
+  "status": "shown",
+  "text": null,
+  "todo": {}
+ },
+ "duplicate/not-duplicates": {
+  "answer": "not-duplicates",
+  "call": null,
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "local": "not-duplicates"
+  }
+ },
+ "duplicate/yes": {
+  "answer": "yes",
+  "call": {
+   "args": {
+    "expect": {
+     "7": 12,
+     "9": 30
+    },
+    "fact_id": 7,
+    "from": [
+     9
+    ]
+   },
+   "tool": "memory_merge"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "expect": {
+      "7": 12,
+      "9": 30
+     },
+     "fact_id": 7,
+     "from": [
+      9
+     ]
+    },
+    "tool": "memory_merge"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "fact_decay/changed": {
+  "answer": "changed",
+  "call": {
+   "args": {
+    "content": "new text",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_change"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "content": "new text",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_change"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "fact_decay/forget": {
+  "answer": "forget",
+  "call": {
+   "args": {
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_forget"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_forget"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "fact_decay/keep": {
+  "answer": "keep",
+  "call": {
+   "args": {
+    "action": "confirmed",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_feedback"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "action": "confirmed",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_feedback"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "fact_decay/later": {
+  "answer": null,
+  "call": null,
+  "status": "shown",
+  "text": null,
+  "todo": {}
+ },
+ "fact_decay/outdated": {
+  "answer": "outdated",
+  "call": {
+   "args": {
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_end"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_end"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "fact_decay/wrong": {
+  "answer": "wrong",
+  "call": {
+   "args": {
+    "content": "new text",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_correct"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "content": "new text",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_correct"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "new_candidate/already-stored": {
+  "answer": "already-stored",
+  "call": null,
+  "status": "decided",
+  "text": null,
+  "todo": {}
+ },
+ "new_candidate/later": {
+  "answer": null,
+  "call": null,
+  "status": "shown",
+  "text": null,
+  "todo": {}
+ },
+ "new_candidate/never": {
+  "answer": "never",
+  "call": null,
+  "status": "decided",
+  "text": null,
+  "todo": {}
+ },
+ "new_candidate/no": {
+  "answer": "no",
+  "call": null,
+  "status": "decided",
+  "text": null,
+  "todo": {}
+ },
+ "new_candidate/not-a-fact": {
+  "answer": "not-a-fact",
+  "call": null,
+  "status": "decided",
+  "text": null,
+  "todo": {}
+ },
+ "new_candidate/save": {
+  "answer": "save",
+  "call": {
+   "args": {
+    "content": "new text",
+    "expect": {
+     "7": 12
+    },
+    "origin": "said"
+   },
+   "tool": "memory_add"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "content": "new text",
+     "expect": {
+      "7": 12
+     },
+     "origin": "said"
+    },
+    "tool": "memory_add"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "new_fact/forget": {
+  "answer": "forget",
+  "call": {
+   "args": {
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_forget"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_forget"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "new_fact/later": {
+  "answer": null,
+  "call": null,
+  "status": "shown",
+  "text": null,
+  "todo": {}
+ },
+ "new_fact/no": {
+  "answer": "no",
+  "call": {
+   "args": {
+    "action": "unhelpful",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_feedback"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "action": "unhelpful",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_feedback"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "new_fact/outdated": {
+  "answer": "outdated",
+  "call": {
+   "args": {
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_end"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_end"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "new_fact/reject": {
+  "answer": "reject",
+  "call": {
+   "args": {
+    "action": "unhelpful",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_feedback"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "action": "unhelpful",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_feedback"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   },
+   "local": "reject"
+  }
+ },
+ "new_fact/wrong": {
+  "answer": "wrong",
+  "call": {
+   "args": {
+    "content": "new text",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_correct"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "content": "new text",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_correct"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "new_fact/yes": {
+  "answer": "yes",
+  "call": {
+   "args": {
+    "action": "confirmed",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_feedback"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "action": "confirmed",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_feedback"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "outcome/changed": {
+  "answer": "changed",
+  "call": {
+   "args": {
+    "content": "new text",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_change"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "content": "new text",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_change"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "outcome/forget": {
+  "answer": "forget",
+  "call": {
+   "args": {
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_forget"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_forget"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "outcome/keep": {
+  "answer": "keep",
+  "call": {
+   "args": {
+    "action": "confirmed",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_feedback"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "action": "confirmed",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_feedback"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "outcome/later": {
+  "answer": null,
+  "call": null,
+  "status": "shown",
+  "text": null,
+  "todo": {}
+ },
+ "outcome/outdated": {
+  "answer": "outdated",
+  "call": {
+   "args": {
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_end"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_end"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "outcome/wrong": {
+  "answer": "wrong",
+  "call": {
+   "args": {
+    "content": "new text",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_correct"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "content": "new text",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_correct"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "promotion/forget": {
+  "answer": "forget",
+  "call": {
+   "args": {
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_forget"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_forget"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "promotion/later": {
+  "answer": null,
+  "call": null,
+  "status": "shown",
+  "text": null,
+  "todo": {}
+ },
+ "promotion/no": {
+  "answer": "no",
+  "call": {
+   "args": {
+    "action": "unhelpful",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_feedback"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "action": "unhelpful",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_feedback"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   },
+   "local": "reject"
+  }
+ },
+ "promotion/outdated": {
+  "answer": "outdated",
+  "call": {
+   "args": {
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_end"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_end"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "promotion/yes": {
+  "answer": "yes",
+  "call": {
+   "args": {
+    "action": "confirmed",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_feedback"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "action": "confirmed",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_feedback"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "review/forget": {
+  "answer": "forget",
+  "call": {
+   "args": {
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_forget"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_forget"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "review/later": {
+  "answer": null,
+  "call": null,
+  "status": "shown",
+  "text": null,
+  "todo": {}
+ },
+ "review/no": {
+  "answer": "no",
+  "call": {
+   "args": {
+    "action": "unhelpful",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_feedback"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "action": "unhelpful",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_feedback"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "review/outdated": {
+  "answer": "outdated",
+  "call": {
+   "args": {
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_end"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_end"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "review/reject": {
+  "answer": "reject",
+  "call": {
+   "args": {
+    "action": "unhelpful",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_feedback"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "action": "unhelpful",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_feedback"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   },
+   "local": "reject"
+  }
+ },
+ "review/wrong": {
+  "answer": "wrong",
+  "call": {
+   "args": {
+    "content": "new text",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_correct"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "content": "new text",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_correct"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "review/yes": {
+  "answer": "yes",
+  "call": {
+   "args": {
+    "action": "confirmed",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_feedback"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "action": "confirmed",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_feedback"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "trust_feedback/later": {
+  "answer": null,
+  "call": null,
+  "status": "shown",
+  "text": null,
+  "todo": {}
+ },
+ "trust_feedback/no": {
+  "answer": "no",
+  "call": null,
+  "status": "decided",
+  "text": "new text",
+  "todo": {}
+ },
+ "trust_feedback/yes": {
+  "answer": "yes",
+  "call": {
+   "args": {
+    "action": "unhelpful",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_feedback"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "action": "unhelpful",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_feedback"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
+ }
+}

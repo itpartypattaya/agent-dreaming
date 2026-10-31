@@ -115,7 +115,16 @@ def _deep_merge(base, override):
 
 
 FACT_ID_RE = re.compile(r"\d+")
-FACT_SOURCES = ("holographic", "none")
+FACT_SOURCES = ("holographic", "external", "none")
+# `external`: facts of another memory system, handed in as dicts with FACT_FIELDS (`use_facts`); every section
+# that needs holographic-memory itself (trust, confirmations, keywords, duplicates, sweeps) stays off for them.
+_EXTERNAL_FACTS = ()
+
+
+def use_facts(facts):
+    """The facts of an `external` source for the nights that follow (copies; the caller keeps its own)."""
+    global _EXTERNAL_FACTS
+    _EXTERNAL_FACTS = tuple(dict(f) for f in facts or ())
 
 
 def messages_for(fact, messages, by_store=None):
@@ -514,7 +523,10 @@ FACT_FIELDS = ["fact_id", "content", "category", "tags", "trust_score", "retriev
 
 
 def load_facts(db=None):
-    """Facts of the holographic-memory store as dicts with FACT_FIELDS, read-only; [] without a store."""
+    """Facts as dicts with FACT_FIELDS: the holographic-memory store, read-only ([] without one), or the facts an
+    `external` source handed in (`use_facts`)."""
+    if db is None and fact_source() == "external":
+        return [dict(f) for f in _EXTERNAL_FACTS]
     path = db or fact_store_path()
     if not path or _missing_db(path, "treating the fact store as empty"):
         return []
@@ -4864,19 +4876,27 @@ def _json_string(literal):
         return literal
 
 
-def forget_sweep(db=None):
+def forget_sweep(db=None, tombstones=None, facts=None):
     """Clean this skill's copies of facts the store has forgotten (see the section comment). Every run looks for
     every tombstone again, so a copy written back by a pass that loaded the fact before it was forgotten, or a
     file that could not be removed last time, is caught on the next run; with nothing left the run changes
     nothing. Also refreshes the diary index from the current facts, so a fact forgotten later can still be found
-    in old lines. `errors` lists what could not be cleaned (the gate then fails and is retried)."""
+    in old lines. `errors` lists what could not be cleaned (the gate then fails and is retried). An `external` source
+    hands in its *tombstones* (ids gone since) and its current *facts* instead of a store."""
     index_path = STATE.diary_index
     state_path = STATE.forget_sweep
     state = _load_state_file(state_path)
     state_before = json.dumps(state, sort_keys=True)
     store_errors = []
-    tombstones = load_forgotten(db, errors=store_errors)
-    _index_current_facts(db, index_path)
+    if tombstones is None:
+        tombstones = load_forgotten(db, errors=store_errors)
+        _index_current_facts(db, index_path)
+    else:
+        tombstones = {int(i): "" for i in tombstones}
+        try:
+            update_diary_index(index_path, list(facts or ()))
+        except OSError as exc:
+            print(f"[dream] warn: diary index not updated: {exc}", file=sys.stderr)
     done = state.setdefault("swept", {})
     new = sorted(str(i) for i in tombstones if str(i) not in done)
     summary = {"tombstones": len(tombstones), "swept": len(new), "rejected": 0, "seen": 0, "proposals": 0,

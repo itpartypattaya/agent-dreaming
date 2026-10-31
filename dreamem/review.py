@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 
-from . import candidates, config, engineapi, questions, report, store
+from . import candidates, config, engineapi, notes, providers, questions, report
 from .fsutil import read_json, write_json, write_private
 from .lock import Lock
 from .paths import Homes
@@ -17,13 +17,17 @@ INSTRUCTIONS = """How to close a question (one at a time, in the person's langua
 - Ask it with the texts as shown. Wait for the person's own answer; never answer for them.
 - Record it: dreamem decide <Q> <answer> [--text "new text"] [--profile P]. It prints the memory tool call to make, or
   nothing when there is none.
-- Before the call: memory_stats — its `database` must be the question's store (same file); otherwise stop.
+- Before the call, what `check` names: `database` — memory_stats must show that file; `memory_file` (MCP
+  memory) — this session's memory server must use that MEMORY_FILE_PATH; `observation` — open_nodes must hold it
+  word for word; otherwise stop.
 - Then make exactly that call; its `expect` makes the store refuse a fact changed since the night. Success: dreamem
   applied <Q>. A refusal (changed_since, not found): dreamem failed <Q> --reason <what it said>, and show the person
   the current text.
 - "Not now" is an answer: dreamem decide <Q> later. A mistake: dreamem undo <Q> (memory is not touched by it).
-- Notes of Claude Code (note_decay) are never edited here: tell the person which note, and that they can fix or delete
-  it themselves, or in a session of that project.
+- An `edit` (a Claude Code note): dreamem verify <Q> first; `changed` → stop. `ok` → make exactly the edit at once,
+  as exact replacements of the text you read (replace-body: the body after the frontmatter, and the description;
+  delete: empty the body by exact replacement, then delete the file and its line in MEMORY.md), then dreamem applied
+  <Q>. A `calls` list: make the calls in that order. Codex memories are never edited.
 - Possible new facts (new_candidate): judge each yourself first, and do not show the person the ones you turn down.
   A fact only if all hold: lasting (true in a month: a trait, relationship, place, possession, habit, health,
   preference, a standing rule for the agent — not today's event, mood or a plan for this week); about the person or
@@ -99,17 +103,17 @@ def show(homes: Homes, *, profile: str | None = None, as_json: bool = False, inc
         excluded = candidates.exclusions(config.load(homes)[0])
         for name in _profiles(homes, profile):
             doc = _load(homes, name)
-            gone = store.forgotten(doc.get("store")) if doc.get("store") else set()
+            prov = providers.get(doc.get("provider"), doc.get("store"), homes.profile(name) / "state")
+            gone = prov.gone() if doc.get("store") else set()
             changed = False
             visible = []
             for q in doc["questions"]:
-                ids = {q.get("fact_id")} | {(q.get(s) or {}).get("fact_id") for s in ("keep", "copy")}
-                if gone & {i for i in ids if isinstance(i, int)}:
+                if gone & questions.fact_ids(q):
                     if q["status"] in questions.OPEN:
                         q["status"], q["failure"] = questions.FAILED, "forgotten"
+                        for k in questions.FACT_WORDS:
+                            q.pop(k, None)
                         q["content"] = None
-                        q.pop("keep", None)
-                        q.pop("copy", None)
                         changed = True
                     continue
                 wanted = q["status"] in (questions.GENERATED, questions.SHOWN, questions.FAILED) or include_all
@@ -144,7 +148,7 @@ def show(homes: Homes, *, profile: str | None = None, as_json: bool = False, inc
             out(f"Night of {block['generated_at'][:16].replace('T', ' ')} · profile {block['profile']} · "
                 f"store {block['store'] or 'none (notes only)'}")
             for q in block["questions"]:
-                answers = ", ".join([*questions.ANSWERS[q["section"]], questions.LATER])
+                answers = ", ".join([*questions.answers(q), questions.LATER])
                 if q["section"] == "new_candidate" and q.get("clause_text"):
                     said = f"said on {q.get('days', 1)} day(s)"
                     msg = (f"\n  the message: {report._q(q['message_text'], MESSAGE_CHARS)}"
@@ -154,14 +158,16 @@ def show(homes: Homes, *, profile: str | None = None, as_json: bool = False, inc
                     continue
                 ver = f" [version {q['version_id']}]" if q.get("version_id") else ""
                 fail = f" (last try failed: {q['failure']})" if q.get("failure") else ""
-                out(f"- {report.question_text(q)}{ver}{fail}\n  answers: {answers}")
+                extra = providers.for_question(q).note(q)
+                extra = f"\n  {extra}" if extra else ""
+                out(f"- {report.question_text(q)}{ver}{fail}{extra}\n  answers: {answers}")
         out("")
         out(INSTRUCTIONS)
         return 0
 
 
 def decide(homes: Homes, qid: str, answer: str, *, text: str | None = None, profile: str | None = None,
-           out=print) -> int:
+           entity: str | None = None, out=print) -> int:
     with Lock(homes.lock, wait=10):
         try:
             name = _which(homes, qid, profile)
@@ -174,6 +180,10 @@ def decide(homes: Homes, qid: str, answer: str, *, text: str | None = None, prof
             out("error: that text holds a secret or an instruction to an agent; nothing was recorded — "
                 "ask the person to say it without it")
             return 2
+        table = ((config.load(homes)[0].get("providers") or {}).get(q.get("provider") or "") or {})
+        entity = entity or (table.get("entity") if isinstance(table, dict) else None)
+        if entity and q.get("section") == "new_candidate":
+            q["entity"] = str(entity)  # where a saved fact goes in a memory system of entities (MCP memory)
         try:
             todo = questions.decide(q, answer, text)
         except ValueError as exc:
@@ -183,7 +193,8 @@ def decide(homes: Homes, qid: str, answer: str, *, text: str | None = None, prof
         try:
             if todo.get("local") == questions.REJECT:
                 # Only the text the person saw is rejected: the fact must still be at the version shown.
-                now = store.facts_state(doc.get("store"), [q["fact_id"]]).get(int(q["fact_id"])) or {}
+                writer = providers.for_question(q, state_dir)
+                now = writer.heads([q["fact_id"]]).get(int(q["fact_id"])) or {}
                 if now.get("version_id") != q.get("version_id"):
                     questions.undo(q)
                     questions.failed(q, "changed_since")
@@ -199,12 +210,13 @@ def decide(homes: Homes, qid: str, answer: str, *, text: str | None = None, prof
                 questions.answer_outcomes(state_dir, q, True)
                 if q.get("answer") != "save":  # a saved one is recorded once the fact is in memory (applied)
                     questions.answer_candidate(state_dir, q, True)
+                questions.answer_pair(state_dir, q, True)
         except (OSError, ValueError) as exc:
             questions.undo(q)
             out(f"error: the answer was not recorded: {exc}")
             return 1
         _save(homes, name, doc)
-        if todo.get("call"):
+        if questions.to_apply(q):
             out(json.dumps({"question": q["qid"], "profile": name, **todo}, ensure_ascii=False))
         else:
             out(f"{q['qid']}: {q['answer'] or 'later'} recorded; no memory call needed")
@@ -223,7 +235,8 @@ def mark(homes: Homes, qid: str, what: str, *, detail: str | None = None, profil
         q = questions.find(doc, qid)
         try:
             if what == "applied":
-                if q.get("section") == "new_candidate" and fact_id is None:
+                if q.get("section") == "new_candidate" and fact_id is None and \
+                        providers.for_question(q).needs_fact_id:
                     raise ValueError(f"{q['qid']}: give the new fact's id from memory_add: --fact-id N")
                 questions.applied(q, detail, fact_id)
                 questions.answer_candidate(homes.profile(name) / "state", q, True)
@@ -239,6 +252,7 @@ def mark(homes: Homes, qid: str, what: str, *, detail: str | None = None, profil
                     engineapi.close_proposal(state_dir, q["proposal"], "undo")
                 questions.answer_outcomes(state_dir, q, False)
                 questions.answer_candidate(state_dir, q, False)
+                questions.answer_pair(state_dir, q, False)
                 questions.undo(q)
         except ValueError as exc:
             out(f"error: {exc}")
@@ -246,6 +260,31 @@ def mark(homes: Homes, qid: str, what: str, *, detail: str | None = None, profil
         _save(homes, name, doc)
         out(f"{q['qid']}: {q['status']}")
         return 0
+
+
+def verify(homes: Homes, qid: str, *, profile: str | None = None, out=print) -> int:
+    """Before the agent edits a Claude Code note: is the file byte for byte the one the person was shown? ``ok``
+    (exit 0), or ``changed`` — the question fails and comes back with the note as it is now (exit 1). Reads only."""
+    with Lock(homes.lock, wait=10):
+        try:
+            name = _which(homes, qid, profile)
+        except LookupError as exc:
+            out(f"error: {exc}")
+            return 2
+        doc = _load(homes, name)
+        q = questions.find(doc, qid)
+        note = q.get("note") or {}
+        if not note.get("path") or not note.get("sha256"):
+            out(f"error: {q['qid']} is not about a Claude Code note file")
+            return 2
+        if notes.file_sha256(note["path"]) == note["sha256"]:
+            out(f"{q['qid']}: ok — the note is as it was shown")
+            return 0
+        questions.failed(q, "changed_since")
+        _save(homes, name, doc)
+        out(f"{q['qid']}: changed — the note {note['path']} is not the text the person was shown; nothing to edit, "
+            "the question comes back with it as it is now")
+        return 1
 
 
 def listing(homes: Homes, *, profile: str | None = None, out=print) -> int:

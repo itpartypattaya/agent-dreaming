@@ -53,6 +53,7 @@ def build() -> argparse.ArgumentParser:
     p.add_argument("qid")
     p.add_argument("answer")
     p.add_argument("--text", help="the new text, for changed / wrong")
+    p.add_argument("--entity", help="save into the MCP memory server: the entity the fact belongs to")
     p.add_argument("--profile")
     for name, help_ in (("applied", "the memory call of a decided question succeeded"),
                         ("failed", "the memory call was refused; the question comes back"),
@@ -65,6 +66,9 @@ def build() -> argparse.ArgumentParser:
             p.add_argument("--fact-id", type=int, help="new_candidate: the id memory_add gave the new fact")
         if name == "failed":
             p.add_argument("--reason", default="failed")
+    p = sub.add_parser("verify", help="before editing a Claude Code note: is it the file the person was shown?")
+    p.add_argument("qid")
+    p.add_argument("--profile")
     p = sub.add_parser("list", help="every question of the last night with its status")
     p.add_argument("--profile")
 
@@ -77,11 +81,11 @@ def build() -> argparse.ArgumentParser:
 
     p = sub.add_parser("hook", help="for the CLIs' hooks")
     p.add_argument("event", choices=["session-start"])
-    p.add_argument("--client", choices=["claude-code", "codex"], required=True)
+    p.add_argument("--client", choices=["claude-code", "codex", "antigravity"], required=True)
     p.add_argument("--async", dest="background", action="store_true", help="run --if-due, print {}")
 
-    p = sub.add_parser("install", help="hook it into Claude Code or Codex, or schedule it")
-    p.add_argument("target", choices=["claude-code", "codex", "schedule"])
+    p = sub.add_parser("install", help="hook it into Claude Code, Codex or Antigravity, or schedule it")
+    p.add_argument("target", choices=["claude-code", "codex", "antigravity", "schedule"])
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--uninstall", action="store_true")
     p.add_argument("--run", dest="run_it", action="store_true", help="claude-code: run the plugin commands")
@@ -98,11 +102,13 @@ def main(argv=None) -> int:
     if args.cmd == "show":
         return review.show(h, profile=args.profile, as_json=args.json, include_all=args.all)
     if args.cmd == "decide":
-        return review.decide(h, args.qid, args.answer, text=args.text, profile=args.profile)
+        return review.decide(h, args.qid, args.answer, text=args.text, profile=args.profile, entity=args.entity)
     if args.cmd in ("applied", "failed", "undo"):
         detail = getattr(args, "result", None) or getattr(args, "reason", None)
         return review.mark(h, args.qid, args.cmd, detail=detail, profile=args.profile,
                            fact_id=getattr(args, "fact_id", None))
+    if args.cmd == "verify":
+        return review.verify(h, args.qid, profile=args.profile)
     if args.cmd == "list":
         return review.listing(h, profile=args.profile)
     if args.cmd == "config":
@@ -125,6 +131,8 @@ def main(argv=None) -> int:
                 print(f"would set dream time: {at}")  # a preview keeps nothing, the time included
             elif set_time(h, at):
                 return 2
+        if args.target == "antigravity":
+            return install.install_antigravity(h, remove=args.uninstall, dry_run=args.dry_run, out=sys.stdout)
         if args.target == "codex":
             return install.install_codex(h, remove=args.uninstall, dry_run=args.dry_run, out=sys.stdout)
         if args.target == "claude-code":

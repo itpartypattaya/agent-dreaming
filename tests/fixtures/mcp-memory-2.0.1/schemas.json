@@ -1,0 +1,223 @@
+{
+ "add_observations": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "observations": {
+    "items": {
+     "properties": {
+      "contents": {
+       "description": "An array of observation contents to add",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "entityName": {
+       "description": "The name of the entity to add the observations to",
+       "type": "string"
+      }
+     },
+     "required": [
+      "entityName",
+      "contents"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "observations"
+  ],
+  "type": "object"
+ },
+ "create_entities": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "entities": {
+    "items": {
+     "properties": {
+      "entityType": {
+       "description": "The type of the entity",
+       "type": "string"
+      },
+      "name": {
+       "description": "The name of the entity",
+       "type": "string"
+      },
+      "observations": {
+       "description": "An array of observation contents associated with the entity",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      }
+     },
+     "required": [
+      "name",
+      "entityType",
+      "observations"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "entities"
+  ],
+  "type": "object"
+ },
+ "create_relations": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "relations": {
+    "items": {
+     "properties": {
+      "from": {
+       "description": "The name of the entity where the relation starts",
+       "type": "string"
+      },
+      "relationType": {
+       "description": "The type of the relation",
+       "type": "string"
+      },
+      "to": {
+       "description": "The name of the entity where the relation ends",
+       "type": "string"
+      }
+     },
+     "required": [
+      "from",
+      "to",
+      "relationType"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "relations"
+  ],
+  "type": "object"
+ },
+ "delete_entities": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "entityNames": {
+    "description": "An array of entity names to delete",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "entityNames"
+  ],
+  "type": "object"
+ },
+ "delete_observations": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "deletions": {
+    "items": {
+     "properties": {
+      "entityName": {
+       "description": "The name of the entity containing the observations",
+       "type": "string"
+      },
+      "observations": {
+       "description": "An array of observations to delete",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      }
+     },
+     "required": [
+      "entityName",
+      "observations"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "deletions"
+  ],
+  "type": "object"
+ },
+ "delete_relations": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "relations": {
+    "description": "An array of relations to delete",
+    "items": {
+     "properties": {
+      "from": {
+       "description": "The name of the entity where the relation starts",
+       "type": "string"
+      },
+      "relationType": {
+       "description": "The type of the relation",
+       "type": "string"
+      },
+      "to": {
+       "description": "The name of the entity where the relation ends",
+       "type": "string"
+      }
+     },
+     "required": [
+      "from",
+      "to",
+      "relationType"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "relations"
+  ],
+  "type": "object"
+ },
+ "open_nodes": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "names": {
+    "description": "An array of entity names to retrieve",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "names"
+  ],
+  "type": "object"
+ },
+ "read_graph": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {},
+  "type": "object"
+ },
+ "search_nodes": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "query": {
+    "description": "The search query to match against entity names, types, and observation content",
+    "maxLength": 2048,
+    "type": "string"
+   }
+  },
+  "required": [
+   "query"
+  ],
+  "type": "object"
+ }
+}

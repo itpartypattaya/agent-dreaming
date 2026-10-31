@@ -10,13 +10,16 @@
   Code drops its output on ``/clear``: neither matters, the next session shows the new night.
 
 The output is the JSON both CLIs take: ``{"hookSpecificOutput": {"hookEventName": "SessionStart",
-"additionalContext": ...}}``. Any failure prints ``{}`` and exits 0: a hook must never break a session.
+"additionalContext": ...}}``; Antigravity takes ``{"injectSteps": [{"systemMessage": {"systemMessage": ...}}]}``, and
+its background hook starts the pass detached (it waits for a hook, 30 seconds at most). Any failure prints ``{}`` and
+exits 0: a hook must never break a session.
 """
 from __future__ import annotations
 
 import io
 import json
 import os
+import subprocess
 import sys
 
 from . import config, report, run
@@ -72,9 +75,30 @@ def _say(out, text: str) -> bool:
         return False
 
 
+def answer(client: str, text: str) -> dict:
+    if client == "antigravity":
+        return {"injectSteps": [{"systemMessage": {"systemMessage": text}}]}
+    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}
+
+
+def detach(args: list[str]) -> None:
+    """Start ``python -I <args>`` on its own, outliving the hook, with nothing of ours attached to it."""
+    kwargs = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
+              "close_fds": True}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    subprocess.Popen([sys.executable, "-I", *args], **kwargs)  # our interpreter, fixed arguments
+
+
 def session_start(homes: Homes, client: str, *, background: bool = False, out=None) -> int:
     out = out or sys.stdout  # looked up per call: a default bound at import time outlives a replaced stdout
     try:
+        if background and client == "antigravity":
+            detach(["-m", "dreamem", "run", "--if-due"])
+            _say(out, "{}\n")
+            return 0
         if background:
             run.run(homes, if_due=True, out=io.StringIO())
             _say(out, "{}\n")
@@ -96,8 +120,7 @@ def session_start(homes: Homes, client: str, *, background: bool = False, out=No
         _say(out, "{}\n")
         return 0
     text = "\n\n".join(t for t in (line, ASK_TIME if ask else None) if t)
-    said = _say(out, json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}},
-                                ensure_ascii=False) + "\n")
+    said = _say(out, json.dumps(answer(client, text), ensure_ascii=False) + "\n")
     if not line or not said:  # nobody read the line: the next session shows it
         return 0
     try:  # bookkeeping after the one answer: whatever fails here prints nothing more

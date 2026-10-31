@@ -1,0 +1,3 @@
+{"type":"entity","name":"Alex","entityType":"person","observations":["Runs a coffee shop on Sadovaya street","Prefers oat milk","Has a cat named Pepper"]}
+{"type":"entity","name":"Sadovaya coffee shop","entityType":"place","observations":["Opens at 9 am on weekdays"]}
+{"type":"relation","from":"Alex","to":"Sadovaya coffee shop","relationType":"owns"}
