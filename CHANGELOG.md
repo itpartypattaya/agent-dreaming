@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.2 — 2026-10-31
+
+- The plugin's session-start hooks no longer fail without the `dreamem` program (the directory installs the plugin
+  alone, and a failing hook puts a "hook error" notice in front of the person at every session start). Without it the
+  quick hook tells the agent the program is missing and how to install it; the background one does nothing. With it,
+  both call `dreamem` as before. Tested by running the hooks' lines in bash and PowerShell 7, with and without the
+  program; Windows PowerShell 5.1 cannot read them (README, Limits).
+
 ## 0.6.1 — 2026-10-31
 
 - Ready for the Claude plugin directory: `plugin.json` names its icon (`icon`; a test checks the file is in the
