@@ -358,15 +358,11 @@ def decide(q: dict, answer: str, text: str | None = None) -> dict:
     q["call"] = call
     if call is None:
         return todo
-    check = {"database": q.get("store")}
-    if call["tool"] != "memory_merge":
-        # The store refuses the write when the fact is no longer at the version shown (holographic-memory issue #2).
-        # The version stays in the check too: a store older than `expect` refuses the argument, and then the agent
-        # checks the version itself right before the call.
-        if q.get("version_id") is not None:
-            call["args"]["expect"] = {str(q.get("fact_id")): q["version_id"]}
-        check["version"] = {"fact_id": q.get("fact_id"), "version_id": q.get("version_id")}
-    return {**todo, "call": call, "check": check}
+    if call["tool"] != "memory_merge" and q.get("version_id") is not None:
+        # The store refuses the write when the fact is no longer at the version shown (holographic-memory 0.5.0+;
+        # an older one ignores the argument, so the skill makes no call through a tool without it).
+        call["args"]["expect"] = {str(q.get("fact_id")): q["version_id"]}
+    return {**todo, "call": call, "check": {"database": q.get("store")}}
 
 
 def applied(q: dict, result: str | None = None) -> None:
