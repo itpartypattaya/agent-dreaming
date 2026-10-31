@@ -24,6 +24,7 @@ It changed nothing. Your job here is to put the questions to the person and carr
 ## Procedure
 
 1. Run `dreamem show` (it marks the questions as shown). If it says there are none, say so in one line and stop.
+   If the command is not found, see "When `dreamem` is missing" below.
    No night yet, or the person asks for a fresh one: `dreamem run` (seconds), then `dreamem show`.
 2. For each question, ask it plainly. Sections and the answers each takes:
    - `duplicate` [D-n] — two facts look like one: **yes** (merge) / **not-duplicates**.
@@ -86,6 +87,21 @@ It changed nothing. Your job here is to put the questions to the person and carr
    `not-duplicates` with it); a memory call already made is
    undone with `memory_revert` (change/correct) or not at all (merge, forget) — say so honestly.
 7. At the end: one or two lines for the person — what was changed, what was left for later. No ids, JSON or paths.
+
+## When `dreamem` is missing
+
+`dreamem show` fails with "command not found", or commands cannot be run in this session at all: the skill is here,
+but the program that makes the nightly pass is not installed (a plugin does not bring it). Do not make the pass
+yourself and do not install anything unasked. Tell the person in two or three lines: the review needs the `dreamem`
+program on their computer, installed once with Python 3.11+ and [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv tool install git+https://github.com/itpartypattaya/agent-dreaming
+```
+
+then a new session (the first pass runs at its start). Say also that it works only where the agent runs commands on
+their computer — Claude Code, Codex CLI, Antigravity — not in the claude.ai chat or Cowork. Run the command only if
+they ask you to.
 
 ## When the memory tools are missing
 

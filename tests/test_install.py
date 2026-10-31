@@ -52,6 +52,30 @@ def test_plugin_skill_is_the_package_skill():
     assert plugin.startswith("---\nname: dream\n")
 
 
+def test_skill_without_dreamem_gives_the_readme_install_command():
+    # The directory installs the plugin alone: the skill must tell a person without the program how to get it,
+    # with the very command the README gives.
+    root = Path(__file__).resolve().parent.parent
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    skill = (root / "dreamem" / "skill" / "SKILL.md").read_text(encoding="utf-8")
+    command = "uv tool install git+https://github.com/itpartypattaya/agent-dreaming"
+    assert command in readme
+    assert "## When `dreamem` is missing" in skill
+    assert command in skill.split("## When `dreamem` is missing", 1)[1]
+
+
+def test_plugin_manifest_names_its_icon():
+    # The directory's card shows the picture `icon` names; a file in the folder that nothing names is not shown.
+    import json
+
+    plugin = Path(__file__).resolve().parent.parent / "claude-plugin"
+    manifest = json.loads((plugin / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    assert "icon" in manifest
+    icon = (plugin / manifest["icon"]).resolve()
+    assert icon.is_relative_to(plugin.resolve()) and icon.is_file()
+    assert icon.read_bytes().startswith(b"\x89PNG")
+
+
 def test_schedule_specs_run_if_due():
     for platform in ("win32", "darwin", "linux"):
         _name, content = install.schedule_spec(platform)

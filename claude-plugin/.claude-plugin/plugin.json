@@ -1,6 +1,6 @@
 {
   "name": "agent-dreaming",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "A nightly, read-only memory review for Claude Code: what you really said, checked against the facts agents stored (holographic-memory) and Claude's own memory notes. Asks a few questions; changes memory only on your yes. Needs the dreamem command on PATH.",
   "author": {
     "name": "Anton Vaskov",
@@ -9,6 +9,7 @@
   "homepage": "https://github.com/itpartypattaya/agent-dreaming",
   "repository": "https://github.com/itpartypattaya/agent-dreaming",
   "license": "MIT",
+  "icon": "./.claude-plugin/icon.png",
   "keywords": [
     "memory",
     "dreaming",

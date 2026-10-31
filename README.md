@@ -8,7 +8,7 @@ about a project that ended a month ago. agent-dreaming compares what your agents
 to them, and once a day asks you a handful of short questions about it. It changes memory only when you answer, and
 only through the memory tools your agent already has.
 
-![Architecture: the pass reads transcripts, sessions, notes and the fact store read-only, writes only to ~/.dreaming; the session hooks show one line and the review skill asks you; memory changes only through the memory tools, on your answer](docs/diagrams/architecture.svg)
+![Architecture: the pass reads transcripts, sessions, notes and the fact store read-only, writes only to ~/.dreaming; the session hooks show one line and the review skill asks you; memory changes only through the memory tools or a checked edit of a note, on your answer](docs/diagrams/architecture.svg)
 
 It has three parts:
 
@@ -41,6 +41,17 @@ It has three parts:
    an edit instead: the agent runs `dreamem verify` (is the file still the one you were shown?) and only then
    changes or deletes the note with its file tools.
 5. **Next night**, an unanswered question is asked again; an answered one rests.
+
+## Examples
+
+What you say in a Claude Code session, and what follows:
+
+| You say | What happens |
+|---|---|
+| `/agent-dreaming:dream`, or just "dream" / "разбери сон" | The agent runs `dreamem show` and asks last night's first question; you answer in your words ("yes, merge them", "she moved to Chiang Mai in May", "not now"), it records the answer and makes the one memory call it prints. |
+| "run dreaming now" / "сделай проход сейчас" | No night yet, or you want a fresh one: the agent runs `dreamem run` (seconds), then starts the review. |
+| "dream at 23:00" / "проход в 23:00" | The agent sets the time with `dreamem config time 23:00`: the first session after 23:00 runs the pass. |
+| `dreamem run --dry-run` (in a terminal) | Prints what tonight's pass would ask, keeps nothing: a safe first look. |
 
 ## What it asks
 
@@ -146,7 +157,9 @@ uv tool install git+https://github.com/itpartypattaya/agent-dreaming
 dreamem run --dry-run        # see what it would ask, keep nothing
 ```
 
-**Claude Code** — the plugin brings the review skill and the two session-start hooks:
+**Claude Code** — the plugin brings the review skill and the two session-start hooks; the program above is installed
+apart, the plugin does not bring it. It works where the agent runs commands on your computer (Claude Code in a
+terminal, an IDE or the desktop app), not in the claude.ai chat or Cowork:
 
 ```
 /plugin install agent-dreaming --marketplace itpartypattaya/agent-dreaming
@@ -274,6 +287,28 @@ Details: [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md).
   and the next night asks about the pair).
 - A call that changes a fact carries `expect`, the version you were shown; holographic-memory 0.5.0 or newer refuses
   it when the fact changed since the night.
+
+## When something does not work
+
+- **The review says `dreamem` is not found**, or a session-start hook error names `dreamem`: the
+  program is not installed or not on `PATH`. Install it as in [Install](#install); if `uv` says its tool folder is
+  not on `PATH`, run `uv tool update-shell`. Then restart Claude Code: hooks see the `PATH` it started with.
+- **No summary line at the start of a session**: the line comes once a day and only for a finished night.
+  `dreamem status` tells whether a pass is due, when it runs (`dream_time`) and how the last night went;
+  `dreamem run` makes one now.
+- **The agent stops: this session talks to another store**: the question is about a per-project store. Answer it in
+  a session of that project.
+- **`coverage … partial` in `dreamem status`**: an agent changed its session format and the pass left the unknown part
+  out. Update agent-dreaming (`uv tool upgrade agent-dreaming`); if it stays, open an issue.
+- **A warning about an unknown timezone**: the pass then counts days in UTC. Set `timezone` in the settings, or
+  reinstall with `uv tool install --reinstall git+https://github.com/itpartypattaya/agent-dreaming`, which brings
+  the zone database (`tzdata`) on Windows.
+- **To remove it all**: `/plugin uninstall agent-dreaming`, `uv tool uninstall agent-dreaming`, and the folder
+  `~/.dreaming` (its questions and answers; your memory is not in it).
+
+Anything else: [open an issue](https://github.com/itpartypattaya/agent-dreaming/issues) with what you ran and what it
+printed. `dreamem status` shows paths, counts and dates, no texts of your facts or messages — look it over before you
+paste it.
 
 ## Limits
 
