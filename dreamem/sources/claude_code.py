@@ -168,7 +168,11 @@ def _load_cache(cache: Path | None) -> dict:
 
 
 def read(projects: Path, since: float, now: float | None = None,
-         cache: Path | None = None) -> tuple[list[Message], Coverage]:
+         cache: Path | None = None, only: set[str] | None = None,
+         boundary: tuple | None = None) -> tuple[list[Message], Coverage]:
+    """*only*: the session files to read (``<project>/<session>.jsonl``), every one when None — read whatever their
+    mtime. *boundary*: a version seen writing turnOrigin elsewhere (a message read again alone keeps the evidence
+    that made its line count)."""
     cov = Coverage(CLIENT)
     if not projects.is_dir():
         cov.note("not_used")  # nothing to read is not a gap
@@ -181,7 +185,7 @@ def read(projects: Path, since: float, now: float | None = None,
     known = _load_cache(cache)
     remembered: dict = {}
 
-    def take(obj, text, path):
+    def take(obj, text, path, below=""):
         ts = _ts(obj.get("timestamp"))
         if ts is None or ts < since or ts > now + 86400:
             return
@@ -192,7 +196,8 @@ def read(projects: Path, since: float, now: float | None = None,
             return
         seen.add(key)
         out.append(Message(CLIENT, str(obj.get("sessionId") or path.stem), ts, text,
-                           cwd=str(obj.get("cwd") or ""), key=f"{CLIENT}:{key}"))
+                           cwd=str(obj.get("cwd") or ""), key=f"{CLIENT}:{key}",
+                           source=path.relative_to(projects).as_posix(), below=below))
 
     def judge(obj, path):
         """Count one line; returns how it is settled for good — MACHINE, UNKNOWN, "none" (counts nothing) — or None
@@ -224,8 +229,10 @@ def read(projects: Path, since: float, now: float | None = None,
         return kind, shown
 
     for path in sorted(projects.glob("*/*.jsonl")):
+        if only is not None and path.relative_to(projects).as_posix() not in only:
+            continue
         try:
-            if path.stat().st_mtime < since:
+            if only is None and path.stat().st_mtime < since:
                 continue
         except OSError:
             cov.partial("vanished")
@@ -274,11 +281,13 @@ def read(projects: Path, since: float, now: float | None = None,
             cov.note("bad_line", bad - 1)
     # Versions before `turnOrigin` existed sent a person's prompt as promptSource sdk (or none) and nothing more:
     # such a line is a person's when its version is older than every version seen writing turnOrigin.
+    if boundary:
+        tagged.add(tuple(boundary))
     first_tagged = min(tagged) if tagged else None
     for version, obj, text, path in legacy:
         if first_tagged is not None and version < first_tagged:
             cov.count(HUMAN)
-            take(obj, text, path)
+            take(obj, text, path, below=".".join(map(str, first_tagged)))
         else:
             cov.count(UNKNOWN)
     cov.messages = len(out)

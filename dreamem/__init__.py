@@ -5,4 +5,4 @@ holographic-memory stored and the CLIs' own memory notes, and runs the dreaming 
 process, keeping its state under ``~/.dreaming``. It writes nothing anywhere else: changes to memory are made by the agent, in a
 session, on a person's "yes" (``dreamem show`` / ``decide`` / ``applied``).
 """
-__version__ = "0.4.2"
+__version__ = "0.5.0"

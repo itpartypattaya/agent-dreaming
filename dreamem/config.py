@@ -32,6 +32,8 @@ DEFAULTS = {
     "windows": {"themes_days": 14, "corroboration_days": 30, "md_decay_days": 30},
     "timezone": "auto",
     "max_questions": 7,
+    # Possible new facts the night hands the review agent to judge (it asks the person about one at most); 0: none.
+    "max_candidates": 10,
     # A longer user turn is mostly a pasted document or log, not the person's words.
     "max_message_chars": 2000,
     "exclude_patterns": [],

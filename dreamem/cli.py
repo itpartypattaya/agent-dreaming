@@ -62,6 +62,7 @@ def build() -> argparse.ArgumentParser:
         p.add_argument("--profile")
         if name == "applied":
             p.add_argument("--result", help="what the tool answered (kept for the record)")
+            p.add_argument("--fact-id", type=int, help="new_candidate: the id memory_add gave the new fact")
         if name == "failed":
             p.add_argument("--reason", default="failed")
     p = sub.add_parser("list", help="every question of the last night with its status")
@@ -100,7 +101,8 @@ def main(argv=None) -> int:
         return review.decide(h, args.qid, args.answer, text=args.text, profile=args.profile)
     if args.cmd in ("applied", "failed", "undo"):
         detail = getattr(args, "result", None) or getattr(args, "reason", None)
-        return review.mark(h, args.qid, args.cmd, detail=detail, profile=args.profile)
+        return review.mark(h, args.qid, args.cmd, detail=detail, profile=args.profile,
+                           fact_id=getattr(args, "fact_id", None))
     if args.cmd == "list":
         return review.listing(h, profile=args.profile)
     if args.cmd == "config":

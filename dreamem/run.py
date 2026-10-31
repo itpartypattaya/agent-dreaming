@@ -10,6 +10,7 @@ acknowledges, so its cooldowns are dropped the next night.
 """
 from __future__ import annotations
 
+import secrets
 import shutil
 import sys
 import time
@@ -18,7 +19,7 @@ from datetime import datetime, timedelta
 from datetime import time as dtime
 from pathlib import Path
 
-from . import config, notes, questions, report, screen, store
+from . import candidates, config, notes, questions, report, screen, store
 from .engineapi import engine_config, run_night
 from .engineapi import forget_sweep as engine_forget_sweep
 from .fsutil import read_json, remove_partials, write_json, write_private
@@ -176,12 +177,19 @@ def pass_profile(pdir: Path, profile: config.Profile, settings: dict, tz: str, d
     wrong = store.went_wrong(profile.store)
     facts = store.facts_state(profile.store, ids | {w["fact_id"] for w in wrong})
     rejected = read_json(state_dir / "rejected.json", {}) or {}
+    offered = []
+    limit = int(settings.get("max_candidates", 10))
+    if profile.store is not None and limit > 0 and data.get("salt"):
+        excluded = candidates.exclusions(settings)
+        found = candidates.find([m for m in msgs if not any(p.search(m.text) for p in excluded)],
+                                store.current_texts(profile.store), data["salt"])
+        offered = [c for c in found if not questions.candidate_rests(state_dir, c["clause"])][:limit]
     qs, skipped = questions.build(result, store=str(profile.store) if profile.store else None, facts=facts,
                                   notes_index=index, coverage_ok=coverage_ok,
                                   max_questions=int(settings.get("max_questions", 7)), profile=profile.name,
                                   night_tag=uuid.uuid4().hex[:4], went_wrong=wrong,
                                   answered=questions.outcomes_answered(state_dir),
-                                  rejected=set(rejected) if isinstance(rejected, dict) else set())
+                                  rejected=set(rejected) if isinstance(rejected, dict) else set(), candidates=offered)
     alerts = [a for a in result.get("alerts") or []
               if coverage_ok or a.get("kind") not in ("memory_loss", "entry_truncated", "probe_missing")]
     doc = {"generated_at": result["generated_at"], "profile": profile.name,
@@ -193,10 +201,7 @@ def pass_profile(pdir: Path, profile: config.Profile, settings: dict, tz: str, d
     write_json(pdir / "dream.json", _without_words(result))
     write_json(pdir / "questions.json", doc)
     write_private(pdir / "report.md", report.render(doc))
-    sections: dict[str, int] = {}
-    for q in qs:
-        if q["status"] in questions.OPEN and q["status"] != questions.DEFERRED:
-            sections[q["section"]] = sections.get(q["section"], 0) + 1
+    sections = questions.open_sections(qs)
     return {"generated_at": doc["generated_at"], "published": time.time(), "open": sum(sections.values()),
             "sections": sections,
             "coverage": {k: v["status"] for k, v in data["coverage"].items()}}
@@ -220,6 +225,8 @@ def run(homes: Homes, *, if_due: bool = False, dry_run: bool = False, only: list
         now = time.time()
         tz = config.timezone_name(settings.get("timezone", "auto"))
         data = gather(homes, settings, now)
+        # The key of the candidates' digests: this install's own; a dry run keeps nothing, not even a key.
+        data["salt"] = secrets.token_bytes(32) if dry_run else candidates.salt(homes)
         summary = read_json(homes.summary, {}) or {}
         entries = dict(summary.get("profiles") or {})
         failed = 0

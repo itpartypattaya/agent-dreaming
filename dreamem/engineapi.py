@@ -41,7 +41,9 @@ def engine_config(*, store: Path | None, settings: dict, tz: str, min_trust: flo
     cfg = {"timezone": tz, "fact_source": "holographic" if store is not None else "none",
            "store": str(store) if store is not None else "",
            "exclude_patterns": list(settings.get("exclude_patterns") or []),
-           "agent_names": list(settings.get("agent_names") or [])}
+           "agent_names": list(settings.get("agent_names") or []),
+           # Nothing here asks about recurring themes (they are not kept either): not counted, half a night saved.
+           "themes": False}
     if min_trust is not None:
         cfg["gates"] = {"feedback_trust_floor": min_trust}
     return cfg

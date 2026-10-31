@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 
-from . import engineapi, questions, report, store
+from . import candidates, config, engineapi, questions, report, store
 from .fsutil import read_json, write_json, write_private
 from .lock import Lock
 from .paths import Homes
@@ -17,15 +17,22 @@ INSTRUCTIONS = """How to close a question (one at a time, in the person's langua
 - Ask it with the texts as shown. Wait for the person's own answer; never answer for them.
 - Record it: dreamem decide <Q> <answer> [--text "new text"] [--profile P]. It prints the memory tool call to make, or
   nothing when there is none.
-- Before the call: memory_stats — its `database` must be the question's store (same file); otherwise stop. The tool
-  must list an `expect` parameter (holographic-memory 0.5.0+): an older one ignores it and would write unchecked —
-  then make no call: dreamem failed <Q> --reason holomem_older_than_0.5.0, and ask the person to update it.
+- Before the call: memory_stats — its `database` must be the question's store (same file); otherwise stop.
 - Then make exactly that call; its `expect` makes the store refuse a fact changed since the night. Success: dreamem
   applied <Q>. A refusal (changed_since, not found): dreamem failed <Q> --reason <what it said>, and show the person
   the current text.
 - "Not now" is an answer: dreamem decide <Q> later. A mistake: dreamem undo <Q> (memory is not touched by it).
 - Notes of Claude Code (note_decay) are never edited here: tell the person which note, and that they can fix or delete
-  it themselves, or in a session of that project."""
+  it themselves, or in a session of that project.
+- Possible new facts (new_candidate): judge each yourself first, and do not show the person the ones you turn down.
+  A fact only if all hold: lasting (true in a month: a trait, relationship, place, possession, habit, health,
+  preference, a standing rule for the agent — not today's event, mood or a plan for this week); about the person or
+  their people, places, pets, things, asserted by them (not a quote, a hypothetical, an opinion about the world); not
+  in memory (memory_search first; found → dreamem decide <Q> already-stored); worth interrupting them for. Unsure: no.
+  Turned down → dreamem decide <Q> not-a-fact. Ask the person about one at most per review: word the fact as one
+  short sentence, and on their yes: dreamem decide <Q> save --text "<fact>", make the memory_add call it prints, then
+  dreamem applied <Q> --fact-id <id it returned>. Their "no" → decide <Q> no (asked again in a month at the
+  earliest); "never" → decide <Q> never. Leave the others open (they come back another night)."""
 
 
 def _profiles(homes: Homes, only: str | None) -> list[str]:
@@ -51,12 +58,26 @@ def _save(homes: Homes, profile: str, doc: dict) -> None:
 def _refresh_summary(homes: Homes, profile: str, doc: dict) -> None:
     summary = read_json(homes.summary, {}) or {}
     entry = (summary.setdefault("profiles", {})).setdefault(profile, {})
-    sections: dict[str, int] = {}
-    for q in doc["questions"]:
-        if q["status"] in questions.OPEN and q["status"] != questions.DEFERRED:
-            sections[q["section"]] = sections.get(q["section"], 0) + 1
+    sections = questions.open_sections(doc["questions"])
     entry.update(generated_at=doc["generated_at"], open=sum(sections.values()), sections=sections)
     write_json(homes.summary, summary)
+
+
+MESSAGE_CHARS = 800  # of the message around a candidate shown to the judging agent
+
+
+def _candidate_view(homes: Homes, key: bytes, q: dict, excluded=()) -> dict | None:
+    """A copy of a candidate with its clause and message read again — for printing only, never saved: the words stay
+    in the CLI's session file. None when the message changed or went, or the clause now holds a secret or an
+    instruction to an agent. A message that does (or is a harness envelope) is left out; the clause is shown alone."""
+    got = candidates.clause_of(homes, key, q)
+    if got is None or engineapi.classify(got[0]) or engineapi.is_envelope(got[0]):
+        return None
+    if any(p.search(got[1]) for p in excluded):  # the person's exclude_patterns hold here too
+        return None
+    clause, message = got
+    safe = not (engineapi.classify(message) or engineapi.is_envelope(message))
+    return {**q, "clause_text": clause, "message_text": message if safe else None}
 
 
 def _which(homes: Homes, qid: str, profile: str | None) -> str:
@@ -74,6 +95,8 @@ def show(homes: Homes, *, profile: str | None = None, as_json: bool = False, inc
     with Lock(homes.lock, wait=10):
         shown_any = False
         payload = []
+        key = None
+        excluded = candidates.exclusions(config.load(homes)[0])
         for name in _profiles(homes, profile):
             doc = _load(homes, name)
             gone = store.forgotten(doc.get("store")) if doc.get("store") else set()
@@ -90,12 +113,21 @@ def show(homes: Homes, *, profile: str | None = None, as_json: bool = False, inc
                         changed = True
                     continue
                 wanted = q["status"] in (questions.GENERATED, questions.SHOWN, questions.FAILED) or include_all
-                if q.get("failure") == "forgotten" or not wanted:
+                if q.get("failure") == "forgotten" or not wanted or q["status"] == questions.GONE:
                     continue
+                view = q
+                if q["section"] == "new_candidate" and q["status"] in questions.OPEN:
+                    key = key or candidates.salt(homes)
+                    view = _candidate_view(homes, key, q, excluded)
+                    if view is None:  # the message is no longer there as it was: nothing to show, ever
+                        questions.gone(q)
+                        changed = True
+                        continue
                 if q["status"] == questions.GENERATED:
                     q["status"] = questions.SHOWN
                     changed = True
-                visible.append(q)
+                    view["status"] = q["status"]
+                visible.append(view)
             if changed:
                 _save(homes, name, doc)
             if visible:
@@ -113,6 +145,13 @@ def show(homes: Homes, *, profile: str | None = None, as_json: bool = False, inc
                 f"store {block['store'] or 'none (notes only)'}")
             for q in block["questions"]:
                 answers = ", ".join([*questions.ANSWERS[q["section"]], questions.LATER])
+                if q["section"] == "new_candidate" and q.get("clause_text"):
+                    said = f"said on {q.get('days', 1)} day(s)"
+                    msg = (f"\n  the message: {report._q(q['message_text'], MESSAGE_CHARS)}"
+                           if q.get("message_text") else "")
+                    out(f"- {q['qid']} possible new fact ({said}): {report._q(q['clause_text'])}{msg}\n"
+                        f"  judge it first (see below); answers: {answers}")
+                    continue
                 ver = f" [version {q['version_id']}]" if q.get("version_id") else ""
                 fail = f" (last try failed: {q['failure']})" if q.get("failure") else ""
                 out(f"- {report.question_text(q)}{ver}{fail}\n  answers: {answers}")
@@ -158,6 +197,8 @@ def decide(homes: Homes, qid: str, answer: str, *, text: str | None = None, prof
                 engineapi.close_proposal(state_dir, q["proposal"], "not-duplicates")
             if q.get("status") == questions.DECIDED:
                 questions.answer_outcomes(state_dir, q, True)
+                if q.get("answer") != "save":  # a saved one is recorded once the fact is in memory (applied)
+                    questions.answer_candidate(state_dir, q, True)
         except (OSError, ValueError) as exc:
             questions.undo(q)
             out(f"error: the answer was not recorded: {exc}")
@@ -171,7 +212,7 @@ def decide(homes: Homes, qid: str, answer: str, *, text: str | None = None, prof
 
 
 def mark(homes: Homes, qid: str, what: str, *, detail: str | None = None, profile: str | None = None,
-         out=print) -> int:
+         fact_id: int | None = None, out=print) -> int:
     with Lock(homes.lock, wait=10):
         try:
             name = _which(homes, qid, profile)
@@ -182,7 +223,10 @@ def mark(homes: Homes, qid: str, what: str, *, detail: str | None = None, profil
         q = questions.find(doc, qid)
         try:
             if what == "applied":
-                questions.applied(q, detail)
+                if q.get("section") == "new_candidate" and fact_id is None:
+                    raise ValueError(f"{q['qid']}: give the new fact's id from memory_add: --fact-id N")
+                questions.applied(q, detail, fact_id)
+                questions.answer_candidate(homes.profile(name) / "state", q, True)
             elif what == "failed":
                 questions.failed(q, detail or "failed")
                 if q.get("section") == "duplicate" and q.get("proposal"):
@@ -194,6 +238,7 @@ def mark(homes: Homes, qid: str, what: str, *, detail: str | None = None, profil
                 elif q.get("answer") == "not-duplicates":
                     engineapi.close_proposal(state_dir, q["proposal"], "undo")
                 questions.answer_outcomes(state_dir, q, False)
+                questions.answer_candidate(state_dir, q, False)
                 questions.undo(q)
         except ValueError as exc:
             out(f"error: {exc}")

@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.5.0 — 2026-10-31
+
+- Possible new facts. The pass picks up to 10 clauses (`max_candidates`, newest first) where the person says something about
+  themselves or their people that memory does not hold — commands, questions, code and quotes left out — and the
+  review agent judges each before showing anything (lasting, theirs, not in memory, worth asking), then asks about
+  one at most: **save** (the fact the agent worded, `memory_add`) / no (a month) / never / not-a-fact /
+  already-stored. Measured before release with the same filter and judging rules: 86 % of the judged facts real on a
+  blind synthetic persona (38 of 82 facts found), 7 of 7 on a real home (about 1.6 a week).
+- Pasted documents are not offered: a message with a file attached (`@"C:\…"`), one of 8 or more lines, a clause
+  pasted word for word into 3 messages. On a real home this removed the briefs and specs that led the list; on two
+  synthetic persons no real fact was lost.
+- No word of the person is kept for it: a candidate is the session file and HMAC-SHA256 digests (a salt made per
+  install, `~/.dreaming/salt`) of the message and the clause; `dreamem show` reads the clause again from the session
+  file, prints it without saving it, and drops a candidate whose message changed or went. After a save only the new
+  fact's id stays; a dry run makes no salt.
+- The review no longer bars a memory call through a tool without an `expect` parameter (0.4.2): the call carries
+  `expect`, holographic-memory 0.5.0+ checks it, an older one lets it through unchecked (README says to update). The
+  gate stood in the way of `memory_add` too, which has no version to pin.
+- Candidates take no place of the other questions (`max_questions` is theirs) and the session line counts them as
+  one. `dreamem applied Q --fact-id N` records the new fact's id for a saved candidate.
+- Codex review of 0.5.0, before release: a failed save's reason and a `--text` given with another answer no longer
+  stay in the question file; a candidate gone after a failed save keeps no words and takes no answer; the person's
+  `exclude_patterns` apply to candidates; an old Claude Code line (before `turnOrigin`) and a message dated a little
+  after its file's mtime are found again; a broken `candidates.json` or reference no longer stops the pass or the
+  review.
+
+## 0.4.3 — 2026-10-31
+
+- The pass no longer counts recurring themes of the person's messages: nothing asked about them and they were not
+  kept, yet counting them took close to half of a pass. On a real home (2 500 messages, 36 facts) a pass with the
+  transcript cache warm went from 16.5 s to 9.0 s; the questions are the same. The engine keeps the count behind a
+  `themes` setting, on by default.
+
 ## 0.4.2 — 2026-10-31
 
 - The review needs holographic-memory 0.5.0 or newer for its memory calls. 0.4.1 fell back to checking the version

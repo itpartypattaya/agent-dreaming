@@ -96,6 +96,9 @@ DEFAULT_CONFIG = {
                    "max_pair_checks": 200000, "max_chars": 2000},
     # What one pass keeps of what it read from the window's messages, in MiB (see references/scoring.md).
     "corroboration": {"memory_mb": 256},
+    # Recurring themes of the window's messages (`emerging_themes`): about half of a night's time; off for a caller
+    # that asks nothing about them.
+    "themes": True,
 }
 
 _UTC_NAMES = {"utc", "etc/utc", "gmt", "etc/gmt", "z", "zulu", "universal", "etc/universal"}
@@ -170,7 +173,7 @@ _SETTING_NAMES = (
     "PINNED_MARKERS", "PROBES", "REJECT_REASK_DAYS", "MEMORY_LOSS_ALERT_FRACTION",
     "PROMOTION_COOLDOWN_DAYS", "FEEDBACK_TRUST_FLOOR", "FEEDBACK_CAP", "KEYWORDS_ENABLED", "KEYWORDS_CAP",
     "DUP_ENABLED", "DUP_MIN_CONTAINMENT", "DUP_PER_NIGHT", "DUP_COOLDOWN_DAYS", "DUP_MAX_PAIR_CHECKS",
-    "DUP_MAX_CHARS", "PASS_MEMORY_MB",
+    "DUP_MAX_CHARS", "PASS_MEMORY_MB", "THEMES",
 )
 
 
@@ -231,6 +234,7 @@ def configure(cfg):
     s.DUP_MAX_CHARS = _number(dup, "max_chars", defaults["max_chars"], int, 1)
     corr = cfg.get("corroboration") if isinstance(cfg.get("corroboration"), dict) else {}
     s.PASS_MEMORY_MB = _number(corr, "memory_mb", 256, float, 1.0, 1e9)
+    s.THEMES = cfg.get("themes", True) is not False
     s.EXCLUDE_PATTERNS = []
     for pat in (cfg.get("exclude_patterns") or []):
         try:
@@ -4179,7 +4183,7 @@ def night(*, memory, messages, state, acks=None, window_days=14, corr_days=30, m
     decays, decays_suppressed = d.all_decays, d.decays_suppressed
     feedback, feedback_suppressed = d.trust_feedback, d.feedback_suppressed
     keywords_needed, keywords_pending, confirm = d.keywords_needed, d.keywords_pending, d.confirm
-    themes = _new_themes(messages, window_days, facts, memory_text)
+    themes = _new_themes(messages, window_days, facts, memory_text) if SETTINGS.THEMES else []
     md_dec = md_decays(memory, messages, md_decay_days, state.asked, cap=SETTINGS.PUBLISH_CAP, reask=reask_md,
                        rules=inputs.rules)
 
