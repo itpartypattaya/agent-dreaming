@@ -126,8 +126,9 @@ Without holographic-memory the review works on Claude Code's memory notes alone.
   partial coverage; a night with partial coverage asks no "still relevant?" question.
 - A short quote you pasted and a sentence you typed look the same in a transcript.
 - Claude Code's memory notes and Codex memories are never edited by this tool (the review tells you which note to fix).
-- holographic-memory checks versions on merge (`expect`); for other changes the review checks the version right
-  before the call.
+- Every memory call of the review carries `expect`, the version the person was shown: holographic-memory refuses
+  a fact changed since (on merge always; on the other writes from the release after 0.5.0 — with an older one the
+  review checks the version itself right before the call).
 
 ## Licence
 

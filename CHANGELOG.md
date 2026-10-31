@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1 — 2026-10-31
+
+- Every memory call the review prints carries `expect` with the version the person was shown, not only a merge:
+  holographic-memory now takes it on change, correct, end, forget and feedback too (its issue #2) and refuses a fact
+  changed since, in the write's own transaction. With a store older than that the tool refuses the argument, and the
+  skill falls back to checking the version right before the call, as before.
+- The version is the fact's head, as holographic-memory checks `expect` against it (the newest version that is not
+  a correction). A fact ended since (its head is `ended`) is no longer asked about: before, the night could ask
+  "is it right?" about it with no version at all, and the answer's write went out unchecked.
+
 ## 0.4.0 — 2026-10-31
 
 - A new kind of question from holographic-memory's outcome journal (0.4+, `experience = true`): a fact an agent

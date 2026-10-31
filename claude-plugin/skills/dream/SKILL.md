@@ -50,13 +50,13 @@ It changed nothing. Your job here is to put the questions to the person and carr
 4. Checks, right before the call:
    - `memory_stats`: its `database` must be the same file as `check.database`. Otherwise stop: this session's store is
      another one (a per-project store); tell the person to answer it in a session of that project.
-   - every call except `memory_merge`: `memory_history {fact_id}` — the current version must be
-     `check.version.version_id`. Otherwise the fact changed since the night: `dreamem failed Q3-7f2a --reason changed_since`,
-     show the person the current text, and ask again if they want.
-   - `memory_merge` carries `expect`; the store itself refuses a changed pair. The other writes cannot be pinned to a
-     version by the store yet (holographic-memory issue #2): call `memory_history` right before the write, nothing
-     in between.
-5. Make exactly the printed call (same tool, same arguments). Then:
+   - every call carries `expect` (the version the person was shown): the store itself refuses the write when the fact
+     changed since the night, and nothing else is to check. Only if the tool refuses the `expect` argument itself (a
+     holographic-memory older than issue #2): call `memory_history {fact_id}` right before the call — the current
+     version must be `check.version.version_id` — and make the call without `expect`, nothing in between. A version
+     that differs: `dreamem failed Q3-7f2a --reason changed_since`, show the person the current text, ask again if
+     they want.
+5. Make exactly the printed call (same tool, same arguments; without `expect` only as step 4 says). Then:
    - success → `dreamem applied Q3-7f2a --result '<short summary of the answer>'`;
    - refused (`changed_since`, not found, any error) → `dreamem failed Q3-7f2a --reason '<what it said>'`, and tell the person
      the question will come back with the current texts.

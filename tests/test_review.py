@@ -47,7 +47,8 @@ def test_changed_needs_the_new_text(world):
         questions.decide(q, "changed")
     todo = questions.decide(q, "changed", "Магазин закрывается в десять вечера по пятницам")
     assert todo["call"] == {"tool": "memory_change", "args": {"fact_id": fid, "content":
-                                                               "Магазин закрывается в десять вечера по пятницам"}}
+                                                               "Магазин закрывается в десять вечера по пятницам",
+                                                               "expect": {str(fid): 1}}}
 
 
 def test_later_keeps_it_open_and_undo_reopens(world):
@@ -80,7 +81,8 @@ def test_reject_puts_the_fact_on_the_core_reject_list(world):
     lines = []
     assert review.decide(world.homes, q["qid"], "reject", out=lines.append) == 0
     # "never ask again" also stops recall offering it: the answer hands the agent that one call
-    assert json.loads(lines[0])["call"] == {"tool": "memory_feedback", "args": {"fact_id": fid, "action": "unhelpful"}}
+    assert json.loads(lines[0])["call"] == {"tool": "memory_feedback", "args": {
+        "fact_id": fid, "action": "unhelpful", "expect": {str(fid): world.version(fid)}}}
     rejected = json.loads((world.homes.profile("global") / "state" / "rejected.json")
                           .read_text(encoding="utf-8"))
     assert any(str(fid) in json.dumps(v) for v in rejected.values())
@@ -124,3 +126,13 @@ def test_one_question_about_a_fact_a_night(world):
     assert len(about) >= 2  # the engine did offer it twice
     assert [q["status"] for q in about].count(questions.GENERATED) == 1
     assert doc["skipped"]["same_fact"] == len(about) - 1
+
+
+def test_a_fact_ended_since_is_not_asked_about(world):
+    """holographic-memory keeps an ended fact (its head version is `ended`): a night must not ask whether it still
+    holds, and no answer may go out with a version the store does not hold as its head (a note from the
+    holomem session, 2026-10-31: `expect` is checked against the head, not only `current`)."""
+    fid = world.fact(FRIDAY, origin="inferred", days_old=2)
+    world.end(fid)
+    doc = night(world)
+    assert [q for q in doc["questions"] if q.get("fact_id") == fid] == []
