@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (0.6.0)
+## 0.6.0 — 2026-10-31
 
 - Memory systems behind one seam (`dreamem/providers`): a system reads its store for the pass and says how an answer
   becomes calls of its own tools. holographic-memory stays the reference, its 33 calls byte for byte as before
