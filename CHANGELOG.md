@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.3 — 2026-10-31
+
+- The plugin directory's check blocked 0.6.2: it read the install command in the hook's hint
+  (`uv tool install git+…`) as an unpinned package launcher. Without `dreamem` the hook now points the agent to the
+  README's install steps instead; a test keeps package installs out of the hooks.
+
 ## 0.6.2 — 2026-10-31
 
 - The plugin's session-start hooks no longer fail without the `dreamem` program (the directory installs the plugin

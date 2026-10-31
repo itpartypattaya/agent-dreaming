@@ -2,8 +2,10 @@
 Git Bash on Windows) or PowerShell when Git Bash is missing.
 
 Requirement: the directory installs the plugin without the dreamem program, and a hook that fails puts a "hook error"
-notice in front of the person at every session start. So without dreamem both hooks succeed and the quick one tells
-the agent how to install it; with dreamem they call it with the same arguments as before and pass its answer on.
+notice in front of the person at every session start. So without dreamem both hooks succeed and the quick one points
+the agent to the install instructions; with dreamem they call it with the same arguments as before and pass its answer
+on. The directory blocks a hook that holds a package install (it reads `uv tool install git+…` as an unpinned
+launcher), so the hooks name the instructions, never the command.
 """
 import json
 import os
@@ -15,7 +17,8 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-INSTALL = "uv tool install git+https://github.com/itpartypattaya/agent-dreaming"
+INSTALL = "https://github.com/itpartypattaya/agent-dreaming#install"
+LAUNCHERS = ("uv ", "uvx", "npx", "bunx", "pipx", "pip ")
 
 
 def hooks():
@@ -56,7 +59,7 @@ def fake_dreamem(folder: Path) -> None:
 
 
 @pytest.mark.parametrize("shell", ["bash", "powershell"])
-def test_without_dreamem_the_hooks_succeed_and_say_how_to_install(shell, tmp_path):
+def test_without_dreamem_the_hooks_succeed_and_say_where_to_install(shell, tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
     quick, background = hooks()
@@ -81,3 +84,8 @@ def test_with_dreamem_the_hooks_call_it_as_before(shell, tmp_path):
         assert '{"from": "dreamem"}' in done.stdout
         assert INSTALL not in done.stdout
     assert background.get("async") is True and not quick.get("async")
+
+
+def test_hooks_hold_no_package_install():
+    for hook in hooks():
+        assert not any(word in hook["command"] for word in LAUNCHERS), hook["command"]
