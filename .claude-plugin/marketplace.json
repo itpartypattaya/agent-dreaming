@@ -1,6 +1,6 @@
 {
   "name": "agent-dreaming",
-  "description": "Nightly read-only memory review for Claude Code and Codex CLI.",
+  "description": "Nightly read-only memory review for Claude Code, Codex CLI and Antigravity.",
   "owner": {
     "name": "itpartypattaya"
   },

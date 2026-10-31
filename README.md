@@ -8,7 +8,7 @@ about a project that ended a month ago. agent-dreaming compares what your agents
 to them, and once a day asks you a handful of short questions about it. It changes memory only when you answer, and
 only through the memory tools your agent already has.
 
-![Architecture: the pass reads transcripts, sessions, notes and the fact store read-only, writes only to ~/.dreaming; the session hooks show one line and the review skill asks you; memory changes only through the memory tools, on your answer](docs/diagrams/architecture.svg)
+![Architecture: the pass reads transcripts, sessions, notes and the fact store read-only, writes only to ~/.dreaming; the session hooks show one line and the review skill asks you; memory changes only through the memory tools or a checked edit of a note, on your answer](docs/diagrams/architecture.svg)
 
 It has three parts:
 

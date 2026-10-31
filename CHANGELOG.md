@@ -1,11 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.6.1 — 2026-10-31
 
 - Ready for the Claude plugin directory: `plugin.json` names its icon (`icon`; a test checks the file is in the
   plugin). The review skill says what to do when the `dreamem` program is missing (the directory installs the plugin
   alone): the install command, and that it works only where the agent runs commands on the person's computer, not in
   the claude.ai chat or Cowork. README: a table of example requests and a section "When something does not work".
+- The architecture diagram shows Antigravity and Gemini CLI sessions, the MCP `memory` server and subagents'
+  memory; the package and marketplace descriptions name Antigravity.
 
 ## 0.6.0 — 2026-10-31
 
