@@ -204,3 +204,42 @@ def test_external_duplicate_budget_is_reported(world, mem, monkeypatch):
     world.say({1: ["касса сошлась"]})
     doc = night(world)
     assert any(a["kind"] == "duplicates_budget" for a in doc["alerts"])
+
+
+def test_rejected_observation_does_not_reappear_as_duplicate(world, mem):
+    from dreamem import engineapi
+
+    texts = ["Alex runs a coffee shop on Sadovaya street", "Alex runs the coffee shop on Sadovaya street"]
+    mem.write_text(json.dumps({"type": "entity", "name": "Alex", "entityType": "person", "observations": texts})
+                   + "\n", encoding="utf-8")
+    world.say({1: ["касса сошлась"]})
+    q = next(q for q in night(world)["questions"] if q["section"] == "external_duplicate")
+    state = world.homes.profile("mcp-memory") / "state"
+    engineapi.reject(state, q["copy"]["fact_id"], q["copy"]["content"], "not useful")
+    assert not [item for item in night(world)["questions"] if item["section"] == "external_duplicate"]
+
+
+def test_duplicate_search_does_not_compare_across_entities(world, mem):
+    graph = [{"type": "entity", "name": f"Customer {i}", "entityType": "person",
+              "observations": ["Prefers oat milk in coffee"]} for i in range(634)]
+    graph.append({"type": "entity", "name": "Alex", "entityType": "person", "observations": [
+        "Alex runs a coffee shop on Sadovaya street", "Alex runs the coffee shop on Sadovaya street"]})
+    mem.write_text("\n".join(json.dumps(x) for x in graph) + "\n", encoding="utf-8")
+    world.say({1: ["касса сошлась"]})
+    doc = night(world)
+    assert any(q["section"] == "external_duplicate" for q in doc["questions"])
+    assert not any(a["kind"] == "duplicates_budget" for a in doc["alerts"])
+
+
+def test_duplicate_search_shares_one_budget_across_entities(world, mem, monkeypatch):
+    from dreamem.engine import dream
+
+    monkeypatch.setitem(dream.DEFAULT_CONFIG["duplicates"], "max_pair_checks", 1)
+    graph = [{"type": "entity", "name": name, "entityType": "person", "observations": [
+        "Runs a coffee shop on Sadovaya street", "Runs the coffee shop on Sadovaya street"]}
+             for name in ("Alex", "Sam")]
+    mem.write_text("\n".join(json.dumps(x) for x in graph) + "\n", encoding="utf-8")
+    world.say({1: ["касса сошлась"]})
+    doc = night(world)
+    assert any(a["kind"] == "duplicates_budget" for a in doc["alerts"])
+    assert not [q for q in doc["questions"] if q["section"] == "external_duplicate"]

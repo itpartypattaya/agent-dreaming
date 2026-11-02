@@ -225,17 +225,29 @@ def pass_profile(pdir: Path, profile: config.Profile, settings: dict, tz: str, d
     if prov.name == "mcp-memory" and not store_cov:
         import re
         from .engine import dream
-        safe = [f for f in external if not engineapi.classify(f["content"])] \
+        safe = [f for f in external if not engineapi.classify(f["content"])
+                and engineapi.fingerprint(f["content"]) not in rejected] \
             if dream.SETTINGS.DUP_ENABLED and dream.SETTINGS.DUP_PER_NIGHT > 0 else []
         # Articles can vary in a paraphrase; keep the original words for the question and the exact-text check.
         comparable = [{**f, "content": re.sub(r"\b(?:a|an|the)\b\s*", "", f["content"], flags=re.IGNORECASE)}
                       for f in safe]
+        heads = prov.heads({f["fact_id"] for f in safe})
+        groups = {}
+        for fact in comparable:
+            head = heads.get(fact["fact_id"])
+            if head:
+                groups.setdefault(head["locator"]["entity"], []).append(fact)
+        found, checks = [], 0
         try:
-            found, _ = dream.find_duplicate_pairs(comparable, dream.SETTINGS.DUP_MAX_PAIR_CHECKS)
+            for group in groups.values():
+                if len(group) < 2:
+                    continue
+                matches, used = dream.find_duplicate_pairs(group, dream.SETTINGS.DUP_MAX_PAIR_CHECKS - checks)
+                found.extend(matches)
+                checks += used
         except dream.DupBudget:
             external_budget = True
             found = []
-        heads = prov.heads({f["fact_id"] for f in safe})
         for hit in found:
             a, b = heads.get(hit["a"]), heads.get(hit["b"])
             if not a or not b or a["locator"]["entity"] != b["locator"]["entity"]:
