@@ -62,6 +62,8 @@ def _save(q, text):
 
 _FACT = {"yes": NOTHING, "no": NOTHING, "outdated": _delete, "wrong": _replace, "forget": _delete, "reject": REJECT}
 ANSWERS = {
+    "external_duplicate": {"drop-copy": lambda q, text: _delete({"locator": q["copy"]["locator"]}, text),
+                           "keep-both": NOTHING},
     "review": dict(_FACT),
     "new_fact": dict(_FACT),
     "fact_decay": {"keep": NOTHING, "outdated": _delete, "changed": _replace, "forget": _delete},
@@ -227,6 +229,8 @@ class McpMemory(Provider):
         """The file the night read (the session's memory server must be configured with it: the server has no
         tool that names its file) and the observation, word for word."""
         loc = q.get("locator") or {}
+        if q.get("section") == "external_duplicate":
+            return {"memory_file": q.get("store"), "observations": [q["keep"]["locator"], q["copy"]["locator"]]}
         if q.get("answer") == "save":
             return {"memory_file": q.get("store"), "entity": q.get("entity")}
         return {"memory_file": q.get("store"), "entity": loc.get("entity"), "observation": loc.get("text")}
@@ -234,6 +238,10 @@ class McpMemory(Provider):
     needs_fact_id = False  # a saved observation has no id to give back
 
     def note(self, q):
+        if q.get("section") == "external_duplicate":
+            entity = q["copy"]["locator"]["entity"]
+            return (f"in MCP memory, entity {entity!r}; no merge or history: drop-copy deletes only the second "
+                    "observation after both are checked")
         if q.get("section") == "new_candidate":
             return None
         who = (q.get("locator") or {}).get("entity")

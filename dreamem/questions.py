@@ -32,7 +32,7 @@ OPEN = (GENERATED, SHOWN, FAILED, DEFERRED)
 CLOSED = (DECIDED, APPLIED)
 
 # Asked first: what may be wrong in memory now, then what may be missing, then the notes.
-ORDER = ("duplicate", "conflict", "outcome", "fact_decay", "review", "new_fact", "promotion", "confirm", "trust_feedback",
+ORDER = ("duplicate", "external_duplicate", "conflict", "outcome", "fact_decay", "review", "new_fact", "promotion", "confirm", "trust_feedback",
          "note_duplicate", "note_decay", "new_candidate")
 NOTE_KEYS = ("id", "project", "path", "name", "sha256")
 BUCKET = {"duplicate": "duplicate_pairs", "conflict": "conflicts", "fact_decay": "fact_decays", "review": "promotions",
@@ -64,7 +64,7 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
           max_questions: int, profile: str, night_tag: str | None = None, went_wrong: list[dict] | None = None,
           answered: set | None = None, rejected: set | None = None,
           candidates: list[dict] | None = None, provider=None, note_pairs: list[dict] | None = None,
-          notes: list | None = None) -> tuple[list[dict], dict]:
+          notes: list | None = None, external_pairs: list[dict] | None = None) -> tuple[list[dict], dict]:
     # Question ids carry the night: an answer meant for "Q1" of one night never lands on "Q1" of the next. The tag is
     # the caller's (unique per published night; two nights may share a `generated_at` second).
     night = night_tag or hashlib.sha1(str(result.get("generated_at") or "").encode("utf-8")).hexdigest()[:4]
@@ -99,6 +99,9 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
         qs.append({"section": "duplicate", "bucket": "duplicate_pairs", "seen_key": None, "proposal": item["proposal"],
                    "keep": item["keep"], "copy": item["copy"], "keywords_after": item.get("keywords_after"),
                    "why": item.get("why"), "store": item.get("store") or store})
+    for pair in external_pairs or []:
+        qs.append({"section": "external_duplicate", "bucket": None, "seen_key": None, "pair": pair["key"],
+                   "keep": pair["keep"], "copy": pair["copy"], "store": store})
     for item in result.get("conflicts") or []:
         fact_q("conflict", item, conflicts=item.get("conflicts"))
     for item in went_wrong or []:
@@ -229,7 +232,7 @@ def pair_rests(state_dir: Path, key: str) -> bool:
 
 def answer_pair(state_dir: Path, q: dict, answered: bool) -> None:
     """Record (or, on undo, drop) a "keep both": the same two texts are not offered again."""
-    if q.get("section") != "note_duplicate" or not q.get("pair"):
+    if q.get("section") not in ("note_duplicate", "external_duplicate") or not q.get("pair"):
         return
     data = read_json(state_dir / PAIRS_FILE, {}) or {}
     data = data if isinstance(data, dict) else {}
