@@ -60,6 +60,7 @@ Questions come in this order: what may be wrong in memory now, then what may be 
 | Question | When it is asked | Example | Your answers |
 |---|---|---|---|
 | **Look like one fact — merge?** (`duplicate`) | two facts say the same thing in other words | «Supplier brings beans on Tuesdays» and «Beans arrive Tuesday mornings» | yes · not-duplicates |
+| **Similar MCP observations** (`external_duplicate`) | two observations of the same entity look alike | two descriptions of the same coffee shop | drop-copy · keep-both |
 | **Conflicts with memory** (`conflict`) | a fact and a memory note or `CLAUDE.md` speak of one thing with other numbers, or one negates the other | a fact says 9 pm, a note says 10 pm | changed · outdated · wrong · keep · when the other side is a Claude Code note: note-changed · note-outdated |
 | **An answer that used it went wrong** (`outcome`) | an agent reported in holographic-memory's journal that an answer built on this fact was corrected as stale | the agent was told the office moved | keep · outdated · changed · wrong · forget |
 | **Not mentioned for long — still true?** (`fact_decay`) | nobody has said it for the window (30 days) | a project deadline from last month | keep · outdated · changed · wrong · forget |
@@ -81,6 +82,8 @@ Any question also takes **later**. What each answer does in memory:
 - **forget** — `memory_forget`, then `dreamem forget-sweep` removes it from the dream's own copies.
 - **reject** — never ask about this text again (kept in the pass's own reject list; memory is not touched).
 - **not-duplicates** — the pair is never offered again.
+- **drop-copy** / **keep-both** — for MCP observations, delete only the second exact observation or leave both;
+  the server has no merge or history, and both texts must still match before the call.
 - **no** — for an unconfirmed fact: marked unhelpful; for a possible new fact: asked again in a month at the earliest.
 - **never** / **not-a-fact** / **already-stored** — a possible new fact is not offered again (the last two are the agent's own verdicts, never shown to you).
 
@@ -121,8 +124,13 @@ reports, once per report, and only while the fact is still the version the answe
 | **Claude Code memory notes** (auto memory, subagents' memory) | `~/.claude/projects/*/memory/`, `~/.claude/agent-memory/*/`, a project's `.claude/agent-memory[-local]/*/` | the agent edits or deletes the note after `dreamem verify` shows it is the file you were shown | a note has no history: "outdated" deletes it |
 | **MCP `memory` server** (`@modelcontextprotocol/server-memory` 2.0.1) | its JSONL file, found by `MEMORY_FILE_PATH` in Claude Code's or Codex's MCP config, or `[providers.mcp-memory] path` | `delete_observations` by the exact text (the agent first finds it in `open_nodes`); a change adds the new text, then deletes the old | no versions, history, origin or trust: no "people keep saying it", "said again", "rejected, still recalled" or "merge?"; "still true?" only after 60 days of its own first-sighting journal; changed and wrong are one answer |
 | **Codex memories** | `~/.codex/memories*/` — what is already written there is not asked about | never edited: Codex calls them generated state | — |
+| **Basic Memory** (optional) | Markdown observations `- [category] text` under an explicitly configured local project directory | read only, used to avoid suggesting a fact already in those notes | no review questions or edits for Basic Memory itself; relations and cloud projects are not read |
 
-Each system is a profile of its own. Not covered: cloud memories (mem0, Supermemory: a network adapter only on request),
+Writable systems have a profile of their own. To include a local Basic Memory project as a read-only dedupe source, add
+`[providers.basic-memory]`, `enabled = true` and `path = "..."` to `~/.dreaming/config.toml`. An unreadable configured
+directory makes note coverage partial. No Basic Memory tools are called and no cloud connection is made.
+
+Not covered: cloud memories (mem0, Supermemory: a network adapter only on request),
 claude-mem (observations of tool runs, not facts about you), Zep, Cognee, Letta.
 
 ## Agents
@@ -132,7 +140,7 @@ claude-mem (observations of tool runs, not facts about you), Zep, Cognee, Letta.
 | Claude Code | transcripts | plugin skill `/agent-dreaming:dream` | plugin hook |
 | Codex CLI | rollouts (plain and zstd) | skill `$dreaming` (`dreamem install codex`) | hook in `config.toml` (trust it in `/hooks`) |
 | Antigravity (agy 1.4.3) | `~/.gemini/antigravity*/brain/*/…/transcript.jsonl`: only what is inside `<USER_REQUEST>` | skill `dreaming` in `~/.gemini/config/skills` (`dreamem install antigravity`) | named hooks in `~/.gemini/config/hooks.json`; tonight's pass starts detached |
-| Gemini CLI (0.64) | `~/.gemini/tmp/*/chats/session-*.jsonl`, tool results left out; `~/.gemini/GEMINI.md` (its global memory file) is read as already written | not installed yet: point it at `SKILL.md` by hand | not yet |
+| Gemini CLI (0.64) | `~/.gemini/tmp/*/chats/session-*.jsonl`, tool results left out; `~/.gemini/GEMINI.md` (its global memory file) is read as already written | user skills: `~/.gemini/skills/dreaming/SKILL.md` or the shared `~/.agents/skills/dreaming/SKILL.md`; verify discovery with `gemini skills list` | not yet |
 | Grok Build | not read yet | it loads skills from `~/.claude/skills/` and MCP servers from `~/.claude.json`: copy the skill there by hand | its SessionStart output is ignored |
 | OpenAI dots, Grok in X or Telegram | — cloud agents keep no local history to read | — | — |
 

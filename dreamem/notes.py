@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 INDEX_LINES, INDEX_BYTES = 200, 25 * 1024
-AUTO, CODEX, INSTRUCTIONS = "auto-memory", "codex-memory", "instructions"
+AUTO, CODEX, INSTRUCTIONS, BASIC = "auto-memory", "codex-memory", "instructions", "basic-memory"
 _FRONT_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
 _KEY_RE = re.compile(r"^(\w[\w-]*)\s*:\s*(.*)$")
 
@@ -131,6 +131,30 @@ def codex_memory(dirs: list[Path]) -> tuple[list[Note], list[str]]:
         if len(notes) == before and any(".git" not in p.parts and p.stat().st_size for p in folder.rglob("*.md")):
             problems.append(f"unknown-format:{folder.name}")
     return notes, problems
+
+
+def basic_memory(root: Path) -> tuple[list[Note], list[str]]:
+    """Read Basic Memory observations as deduplication targets, never modify its Markdown files."""
+    if not root.is_dir():
+        return [], [f"unreadable:basic-memory:{root}"]
+    found, problems = [], []
+    try:
+        paths = sorted(root.rglob("*.md"))
+        for path in paths:
+            if ".git" in path.parts or path.is_symlink():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8-sig")
+            except (OSError, UnicodeError):
+                problems.append(f"unreadable:basic-memory:{path}")
+                continue
+            for line in text.splitlines():
+                match = re.match(r"^\s*[-*]\s+\[[^\]]+\]\s+(.+?)\s*$", line)
+                if match:
+                    found.append(Note(note_id(path), BASIC, root.name, str(path), path.name, _flat(match.group(1))))
+    except OSError:
+        problems.append(f"unreadable:basic-memory:{root}")
+    return found, problems
 
 
 def note_pairs(notes: list[Note], facts: list[tuple[int, str]]) -> list[dict]:

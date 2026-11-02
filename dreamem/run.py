@@ -114,17 +114,30 @@ def gather(homes: Homes, settings: dict, now: float, *, keep: bool = True) -> di
     auto_dirs = homes.claude_auto_memory_dirs() + homes.claude_agent_memory_dirs(projects.roots())
     auto, pressure, problems = notes.auto_memory(auto_dirs) if "claude-code" in clients else ([], [], [])
     codex_notes, codex_problems = notes.codex_memory(homes.codex_memory_dirs()) if "codex" in clients else ([], [])
+    basic = (settings.get("providers") or {}).get("basic-memory") or {}
+    basic = basic if isinstance(basic, dict) else {}
+    basic_path = basic.get("path")
+    if basic.get("enabled") is True:
+        if isinstance(basic_path, str) and basic_path.strip():
+            import os
+            basic_notes, basic_problems = notes.basic_memory(Path(os.path.expandvars(basic_path)).expanduser())
+        else:
+            basic_notes, basic_problems = [], ["basic-memory: enabled without a path"]
+    else:
+        basic_notes, basic_problems = [], []
     auto, auto_screened = screen.notes(auto)
     codex_notes, codex_secret = screen.dedupe_targets(codex_notes)
+    basic_notes, basic_secret = screen.dedupe_targets(basic_notes)
     instr, instr_secret = screen.dedupe_targets(
         notes.instructions(notes.instruction_files(homes.claude, homes.codex, projects.roots(), homes.gemini)))
     return {"messages": kept, "coverage": coverage, "screened": screened, "projects": projects,
-            "auto": auto, "pressure": pressure, "codex_notes": codex_notes, "instructions": instr,
-            "notes_ok": not problems and not codex_problems,
-            "notes_problems": problems + codex_problems,
+            "auto": auto, "pressure": pressure, "codex_notes": codex_notes, "basic_notes": basic_notes,
+            "instructions": instr,
+            "notes_ok": not problems and not codex_problems and not basic_problems,
+            "notes_problems": problems + codex_problems + basic_problems,
             "notes_elsewhere": [str(p) for p in homes.claude_moved_notes(projects.roots())]
             if "claude-code" in clients else [],
-            "notes_screened": {**auto_screened, "dedupe_secret_paragraphs": codex_secret + instr_secret}}
+            "notes_screened": {**auto_screened, "dedupe_secret_paragraphs": codex_secret + basic_secret + instr_secret}}
 
 
 def _prepare_dry(pdir: Path, real: Path) -> None:
@@ -174,7 +187,7 @@ def pass_profile(pdir: Path, profile: config.Profile, settings: dict, tz: str, d
         cfg = engine_config(store=profile.store, settings=settings, tz=tz, min_trust=profile.min_trust,
                             external=external is not None)
         result, entries = run_night(state_dir=state_dir, config=cfg, notes=[n.text for n in auto],
-                                    dedupe=[n.text for n in data["codex_notes"] + data["instructions"]],
+                                    dedupe=[n.text for n in data["codex_notes"] + data["basic_notes"] + data["instructions"]],
                                     messages=[_message(m) for m in msgs], acks=acks,
                                     windows=settings.get("windows") or {}, facts=external,
                                     gone=prov.gone() if external is not None else None)
@@ -204,9 +217,35 @@ def pass_profile(pdir: Path, profile: config.Profile, settings: dict, tz: str, d
         # Only sessions the review can read again (it shows the clause from the session file, never from here).
         found = candidates.find([m for m in msgs if m.client in candidates.READABLE
                                  and not any(p.search(m.text) for p in excluded)],
-                                prov.current_texts(), data["salt"])
+                                prov.current_texts() + [n.text for n in data["basic_notes"]], data["salt"])
         offered = [c for c in found if not questions.candidate_rests(state_dir, c["clause"])][:limit]
     pairs = []
+    external_pairs = []
+    external_budget = False
+    if prov.name == "mcp-memory" and not store_cov:
+        import re
+        from .engine import dream
+        safe = [f for f in external if not engineapi.classify(f["content"])] \
+            if dream.SETTINGS.DUP_ENABLED and dream.SETTINGS.DUP_PER_NIGHT > 0 else []
+        # Articles can vary in a paraphrase; keep the original words for the question and the exact-text check.
+        comparable = [{**f, "content": re.sub(r"\b(?:a|an|the)\b\s*", "", f["content"], flags=re.IGNORECASE)}
+                      for f in safe]
+        try:
+            found, _ = dream.find_duplicate_pairs(comparable, dream.SETTINGS.DUP_MAX_PAIR_CHECKS)
+        except dream.DupBudget:
+            external_budget = True
+            found = []
+        heads = prov.heads({f["fact_id"] for f in safe})
+        for hit in found:
+            a, b = heads.get(hit["a"]), heads.get(hit["b"])
+            if not a or not b or a["locator"]["entity"] != b["locator"]["entity"]:
+                continue
+            entity = a["locator"]["entity"]
+            key = questions.pair_key(entity + "\0" + a["content"], entity + "\0" + b["content"])
+            if not questions.pair_rests(state_dir, key):
+                external_pairs.append({"key": key, "keep": {"fact_id": hit["a"], **a},
+                                       "copy": {"fact_id": hit["b"], **b}})
+                break
     if profile.notes:
         # A fact holding a secret or an instruction to an agent is never paired: its text would be kept and shown.
         facts_now = [(i, t) for i, t in (prov.current_facts() if profile.store is not None else [])
@@ -222,9 +261,12 @@ def pass_profile(pdir: Path, profile: config.Profile, settings: dict, tz: str, d
                                   night_tag=uuid.uuid4().hex[:4], went_wrong=wrong,
                                   answered=questions.outcomes_answered(state_dir),
                                   rejected=set(rejected) if isinstance(rejected, dict) else set(), candidates=offered,
-                                  provider=prov, note_pairs=pairs, notes=auto)
+                                  provider=prov, note_pairs=pairs, notes=auto, external_pairs=external_pairs)
     alerts = [a for a in result.get("alerts") or []
               if coverage_ok or a.get("kind") not in ("memory_loss", "entry_truncated", "probe_missing")]
+    if external_budget:
+        alerts.append({"kind": "duplicates_budget", "message": "MCP memory duplicate search exceeded its pair budget; "
+                       "no duplicates were proposed this night."})
     doc = {"generated_at": result["generated_at"], "profile": profile.name, "provider": prov.name,
            "store": str(profile.store) if profile.store else None, "coverage": coverage,
            "store_coverage": store_cov, "stats": result.get("stats") or {}, "questions": qs, "skipped": skipped, "alerts": alerts,

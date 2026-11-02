@@ -19,7 +19,7 @@ INSTRUCTIONS = """How to close a question (one at a time, in the person's langua
   nothing when there is none.
 - Before the call, what `check` names: `database` — memory_stats must show that file; `memory_file` (MCP
   memory) — this session's memory server must use that MEMORY_FILE_PATH; `observation` — open_nodes must hold it
-  word for word; otherwise stop.
+  word for word; `observations` — open_nodes must hold both named observations word for word; otherwise stop.
 - Then make exactly that call; its `expect` makes the store refuse a fact changed since the night. Success: dreamem
   applied <Q>. A refusal (changed_since, not found): dreamem failed <Q> --reason <what it said>, and show the person
   the current text.
@@ -184,6 +184,16 @@ def decide(homes: Homes, qid: str, answer: str, *, text: str | None = None, prof
         entity = entity or (table.get("entity") if isinstance(table, dict) else None)
         if entity and q.get("section") == "new_candidate":
             q["entity"] = str(entity)  # where a saved fact goes in a memory system of entities (MCP memory)
+        if q.get("section") == "external_duplicate":
+            writer = providers.for_question(q, homes.profile(name) / "state")
+            ids = [q[side]["fact_id"] for side in ("keep", "copy")]
+            heads = writer.heads(ids)
+            if writer.coverage() or any(heads.get(q[side]["fact_id"], {}).get("locator") != q[side]["locator"]
+                                        for side in ("keep", "copy")):
+                questions.failed(q, "changed_since")
+                _save(homes, name, doc)
+                out("error: an observation changed or is gone; nothing was recorded")
+                return 1
         try:
             todo = questions.decide(q, answer, text)
         except ValueError as exc:

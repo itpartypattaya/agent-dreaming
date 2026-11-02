@@ -28,6 +28,8 @@ It changed nothing. Your job here is to put the questions to the person and carr
    No night yet, or the person asks for a fresh one: `dreamem run` (seconds), then `dreamem show`.
 2. For each question, ask it plainly. Sections and the answers each takes:
    - `duplicate` [D-n] — two facts look like one: **yes** (merge) / **not-duplicates**.
+   - `external_duplicate` — two MCP observations look alike: **drop-copy** deletes the second observation only,
+     after checking both exact texts; **keep-both** leaves both in place. There is no merge or history.
    - `conflict` — a fact contradicts what memory says: **changed** (the new state, give `--text`) / **outdated** /
      **wrong** (give the right text in `--text`) / **keep**. When the other side is a Claude Code note (named in the
      question), the note may be the stale one: **note-changed** (`--text`: the note's new text) / **note-outdated**
@@ -76,7 +78,8 @@ It changed nothing. Your job here is to put the questions to the person and carr
    (MEMORY.md) that links `edit.index_entry`. Touch nothing else. Then step 5 as for a call.
 4b. A call of the MCP `memory` server (`delete_observations`, `add_observations`): the memory server of this session
    must be configured with `MEMORY_FILE_PATH` = `check.memory_file` (see its MCP config); `check.observation`, when
-   given, must be in `open_nodes` of `check.entity` word for word; otherwise stop. A saved fact there has no id:
+   given, must be in `open_nodes` of `check.entity` word for word. For `check.observations`, each item's `text` must
+   appear word for word under its `entity` in `open_nodes`; if either check fails, stop. A saved fact there has no id:
    `dreamem applied Q` without `--fact-id`. A `delete_observations` reply "Deleted 0 of …" is
    a failure (the text was not there).
 5. Make exactly the printed call (same tool, same arguments). Then:

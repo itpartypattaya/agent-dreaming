@@ -8,6 +8,7 @@ from .questions import CLOSED, DEFERRED, OPEN
 
 SECTION_TITLE = {
     "duplicate": "look like one fact — merge?",
+    "external_duplicate": "observations look alike — drop the second or keep both?",
     "conflict": "conflicts with what memory says",
     "outcome": "an answer that used it went wrong — still true?",
     "fact_decay": "not mentioned for long — still true?",
@@ -41,6 +42,8 @@ def question_text(q: dict) -> str:
         if copy.get("covered") is False and copy.get("extra_words"):
             line += f" (only the second has: {', '.join(copy['extra_words'])})"
         return line
+    if s == "external_duplicate":
+        return f"{q['qid']} {_q(q['keep']['content'], 2000)} and {_q(q['copy']['content'], 2000)} — {SECTION_TITLE[s]}"
     if s == "new_candidate":  # no words here: the review reads the clause again from the session file
         return f"{q['qid']} said on {q.get('days', 1)} day(s) — {SECTION_TITLE[s]} (shown in the review)"
     if s == "note_duplicate":
@@ -151,7 +154,7 @@ def summary_line(entries: dict) -> str | None:
     if not total:
         return None
     parts = []
-    for name, keys in (("duplicate", ("duplicate",)),
+    for name, keys in (("duplicate", ("duplicate", "external_duplicate")),
                        ("fact", ("conflict", "outcome", "fact_decay", "review", "new_fact", "promotion", "confirm", "trust_feedback")),
                        ("note", ("note_decay", "note_duplicate")), ("possible new fact", ("new_candidate",))):
         n = sum(kinds.get(k, 0) for k in keys)

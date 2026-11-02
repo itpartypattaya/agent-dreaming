@@ -140,3 +140,67 @@ def test_the_pass_never_writes_the_servers_file(world, mem):
     world.say({1: ["касса сошлась"]})
     doc = night(world)
     assert doc["provider"] == "mcp-memory" and mem.read_bytes() == before
+
+
+def test_external_duplicates_ask_before_deleting_and_check_both_observations(world, mem):
+    graph = [{"type": "entity", "name": "Alex", "entityType": "person", "observations": [
+        "Alex runs a coffee shop on Sadovaya street",
+        "Alex runs the coffee shop on Sadovaya street"]}]
+    mem.write_text("\n".join(json.dumps(x) for x in graph) + "\n", encoding="utf-8")
+    before = mem.read_bytes()
+    world.say({1: ["касса сошлась"]})
+    q = next(q for q in night(world)["questions"] if q["section"] == "external_duplicate")
+    assert mem.read_bytes() == before
+    assert set(questions.answers(q)) == {"drop-copy", "keep-both"}
+    lines = []
+    assert review.decide(world.homes, q["qid"], "drop-copy", out=lines.append) == 0
+    todo = json.loads(lines[-1])
+    assert todo["call"]["tool"] == "delete_observations"
+    assert len(todo["check"]["observations"]) == 2
+    assert mem.read_bytes() == before
+
+
+def test_external_duplicate_cannot_be_answered_after_one_side_changed(world, mem):
+    graph = [{"type": "entity", "name": "Alex", "entityType": "person", "observations": [
+        "Alex runs a coffee shop on Sadovaya street",
+        "Alex runs the coffee shop on Sadovaya street"]}]
+    mem.write_text("\n".join(json.dumps(x) for x in graph) + "\n", encoding="utf-8")
+    world.say({1: ["касса сошлась"]})
+    q = next(q for q in night(world)["questions"] if q["section"] == "external_duplicate")
+    mem.write_text(mem.read_text(encoding="utf-8").replace("coffee shop on", "bakery on", 1), encoding="utf-8")
+    out = []
+    assert review.decide(world.homes, q["qid"], "drop-copy", out=out.append) == 1
+    assert "changed" in out[0] or "gone" in out[0]
+
+
+def test_kept_external_duplicates_rest_until_the_words_change(world, mem):
+    graph = [{"type": "entity", "name": "Alex", "entityType": "person", "observations": [
+        "Alex runs a coffee shop on Sadovaya street",
+        "Alex runs the coffee shop on Sadovaya street"]}]
+    mem.write_text("\n".join(json.dumps(x) for x in graph) + "\n", encoding="utf-8")
+    world.say({1: ["касса сошлась"]})
+    q = next(q for q in night(world)["questions"] if q["section"] == "external_duplicate")
+    assert review.decide(world.homes, q["qid"], "keep-both", out=lambda *_: None) == 0
+    assert not [q for q in night(world)["questions"] if q["section"] == "external_duplicate"]
+
+
+def test_observations_of_different_entities_are_not_offered_as_duplicates(world, mem):
+    graph = [{"type": "entity", "name": "Alex", "entityType": "person", "observations": [
+        "Runs a coffee shop on Sadovaya street"]},
+        {"type": "entity", "name": "Sam", "entityType": "person", "observations": [
+            "Runs the coffee shop on Sadovaya street"]}]
+    mem.write_text("\n".join(json.dumps(x) for x in graph) + "\n", encoding="utf-8")
+    world.say({1: ["касса сошлась"]})
+    assert not [q for q in night(world)["questions"] if q["section"] == "external_duplicate"]
+
+
+def test_external_duplicate_budget_is_reported(world, mem, monkeypatch):
+    from dreamem.engine import dream
+
+    def exhausted(*args, **kwargs):
+        raise dream.DupBudget("budget")
+
+    monkeypatch.setattr(dream, "find_duplicate_pairs", exhausted)
+    world.say({1: ["касса сошлась"]})
+    doc = night(world)
+    assert any(a["kind"] == "duplicates_budget" for a in doc["alerts"])
