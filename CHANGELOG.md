@@ -1,7 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 — 2026-11-03
 
+- Basic Memory as an optional read-only source: with `[providers.basic-memory] enabled = true, path = "..."` in
+  `~/.dreaming/config.toml` the night reads the observations `- [category] text` of that local project, so a possible
+  new fact already written there is not offered again. Secrets are screened out; an unreadable directory makes note
+  coverage partial. No Basic Memory tools are called, nothing is edited, no cloud project is read.
+- MCP `memory` server: a new question about two similar observations of the same entity (`external_duplicate`).
+  **drop-copy** deletes the second exact observation after the agent finds both in `open_nodes`; **keep-both** keeps
+  the pair from being asked again until either text changes. A pair you rejected is not asked again; observations of
+  different entities are never paired, and the night warns when it stops comparing at its search budget.
 - A text you give with **changed** or **wrong** is written as yours: `memory_change` and `memory_correct` carry
   `origin: said` (holographic-memory 0.10.0+). Before, a change was stored as the agent's own claim and a correction
   kept an agent's `inferred`, so the next night could ask "an agent stored this lately — is it right?" about what you
