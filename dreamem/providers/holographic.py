@@ -1,5 +1,5 @@
 """holographic-memory: the reference system. Everything the night asks and every call the review prints were made for
-it; this module only gathers them behind the provider seam, unchanged (``tests/fixtures/holomem-0.7.0-calls.json``)."""
+it; this module only gathers them behind the provider seam (every call: ``tests/fixtures/holomem-0.10.1-calls.json``)."""
 from __future__ import annotations
 
 from .. import store as db
@@ -15,7 +15,9 @@ def _change(tool):
     def make(q, text):
         if not text:
             raise ValueError(f"'{tool}' needs the new text: --text \"...\"")
-        return {"tool": tool, "args": {"fact_id": q["fact_id"], "content": text}}
+        # The text is the person's: `said` (holographic-memory 0.10.0+). Without it a change reads as the agent's own
+        # claim and a correction keeps the agent's `inferred` — the next night asked "an agent stored this" about it.
+        return {"tool": tool, "args": {"fact_id": q["fact_id"], "content": text, "origin": "said"}}
     return make
 
 
@@ -105,6 +107,12 @@ class Holographic(Provider):
             # an older one ignores the argument and writes unchecked).
             call["args"]["expect"] = {str(q.get("fact_id")): q["version_id"]}
         return call
+
+    def fallback(self, q, call):
+        # holographic-memory 0.6.0–0.9.x refuses an argument it does not know: the same call without `origin`.
+        if call["tool"] in ("memory_change", "memory_correct") and "origin" in call["args"]:
+            return {"tool": call["tool"], "args": {k: v for k, v in call["args"].items() if k != "origin"}}
+        return None
 
     def check(self, q):
         return {"database": q.get("store")}

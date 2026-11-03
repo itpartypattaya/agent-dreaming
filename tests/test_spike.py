@@ -15,7 +15,7 @@ import sqlite3
 import pytest
 from world import World, days_ago
 
-from dreamem import engineapi, review, run
+from dreamem import engineapi, questions, review, run
 from dreamem.lock import Lock
 
 COFFEE = ("Поставщик кофе Arabica Beans привозит зерно по вторникам утром",
@@ -297,6 +297,55 @@ def test_every_write_carries_expect_of_the_version_shown(world, answer, tool):
     review.decide(world.homes, q["qid"], answer, text="Магазин закрывается в десять", out=printed.append)
     call = json.loads(printed[0])["call"]
     assert call["tool"] == tool and call["args"]["expect"] == {str(fid): world.version(fid)}
+
+
+def test_a_fact_the_person_corrected_is_not_asked_again_as_an_agents(world):
+    """The person answers "wrong" and says the right text: memory now holds their words. The next night must not ask
+    "an agent stored this lately — is it right?" about what they just said (holographic-memory 0.10.0 takes `origin`
+    on memory_correct; without it the corrected text keeps the agent's `inferred`)."""
+    fid = world.fact("Магазин закрывается в девять вечера по пятницам", origin="inferred", days_old=2)
+    q = next(q for q in night(world)["questions"] if q["fact_id"] == fid)
+    assert q["section"] == "new_fact"
+    printed = []
+    review.decide(world.homes, q["qid"], "wrong", text="Магазин закрывается в десять вечера по пятницам",
+                  out=printed.append)
+    args = json.loads(printed[0])["call"]["args"]
+    world.correct(fid, args["content"], origin=args.get("origin"))  # what the store does with the printed call
+    review.mark(world.homes, q["qid"], "applied", out=lambda *_: None)
+    assert [q for q in night(world)["questions"] if q.get("fact_id") == fid] == []
+
+
+@pytest.mark.parametrize("section, answer, tool", [(s, a, t) for s in ("fact_decay", "outcome", "conflict", "review",
+                                                                       "new_fact")
+                                                   for a, t in (("changed", "memory_change"), ("wrong", "memory_correct"))
+                                                   if (s, a) not in {("review", "changed"), ("new_fact", "changed")}])
+def test_a_text_the_person_gave_is_written_as_said(section, answer, tool):
+    """Every answer that writes the person's own text marks it as theirs. An older holographic-memory (before 0.10.0)
+    refuses an argument it does not know: the answer also carries the same call without `origin`, `expect` kept."""
+    q = {"qid": "Q1-abcd", "section": section, "status": questions.SHOWN, "fact_id": 7, "version_id": 12,
+         "content": "x", "store": "C:/holo/memory_store.db"}
+    todo = questions.decide(q, answer, "Магазин закрывается в десять")
+    assert todo["call"]["tool"] == tool and todo["call"]["args"]["origin"] == "said"
+    assert todo["fallback"] == {"tool": tool, "args": {"fact_id": 7, "content": "Магазин закрывается в десять",
+                                                       "expect": {"7": 12}}}
+
+
+def test_the_review_makes_the_fallback_only_after_origin_is_refused():
+    from importlib import resources
+
+    skill = resources.files("dreamem").joinpath("skill/SKILL.md").read_text(encoding="utf-8")
+    lines = skill.splitlines()
+    i = next(i for i, line in enumerate(lines) if "`fallback`" in line)
+    step = " ".join(lines[i - 1:i + 1])  # the bullet: the refusal it waits for, then what to make
+    assert "refused" in step and "argument `origin`" in step
+
+
+def test_no_fallback_for_a_call_every_version_takes(world):
+    fid = world.fact("Магазин закрывается в девять вечера по пятницам", origin="inferred", days_old=2)
+    q = next(q for q in night(world)["questions"] if q["fact_id"] == fid)
+    printed = []
+    review.decide(world.homes, q["qid"], "outdated", out=printed.append)
+    assert "fallback" not in json.loads(printed[0])
 
 
 def test_merge_carries_expect_of_the_versions_shown(world):

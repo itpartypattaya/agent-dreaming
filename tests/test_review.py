@@ -48,7 +48,7 @@ def test_changed_needs_the_new_text(world):
     todo = questions.decide(q, "changed", "Магазин закрывается в десять вечера по пятницам")
     assert todo["call"] == {"tool": "memory_change", "args": {"fact_id": fid, "content":
                                                                "Магазин закрывается в десять вечера по пятницам",
-                                                               "expect": {str(fid): 1}}}
+                                                               "origin": "said", "expect": {str(fid): 1}}}
 
 
 def test_later_keeps_it_open_and_undo_reopens(world):

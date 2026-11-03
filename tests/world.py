@@ -89,6 +89,18 @@ class World:
                  (fid, content), db)
         self.sql("update facts set content=? where fact_id=?", (content, fid), db)
 
+    def correct(self, fid, content, *, origin=None, db=None):
+        """memory_correct as holographic-memory 0.10.1 makes it (checked against a live server, 2026-11-03): the current
+        version closed as `corrected`, the right text current from now; without an `origin` it keeps the fact's."""
+        (seq, kept), = self.sql("select seq, src_origin from fact_versions where fact_id=? and status='current'",
+                                (fid,), db)
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        self.sql("update fact_versions set status='corrected', closed_at=? where fact_id=? and status='current'",
+                 (now, fid), db)
+        self.sql("insert into fact_versions (fact_id, seq, content, status, src_origin) values (?, ?, ?, 'current', ?)",
+                 (fid, seq + 1, content, origin or kept), db)
+        self.sql("update facts set content=?, updated_at=? where fact_id=?", (content, now, fid), db)
+
     def end(self, fid, db=None):
         """memory_end: the current version closed as `ended`; the fact's row stays (it held, until now)."""
         self.sql("update fact_versions set status='ended', closed_at='2026-10-31' where fact_id=? and status='current'",

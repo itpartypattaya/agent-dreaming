@@ -83,6 +83,8 @@ It changed nothing. Your job here is to put the questions to the person and carr
    `dreamem applied Q` without `--fact-id`. A `delete_observations` reply "Deleted 0 of …" is
    a failure (the text was not there).
 5. Make exactly the printed call (same tool, same arguments). Then:
+   - refused because the tool does not know the argument `origin` (holographic-memory before 0.10.0), and the answer
+     has `fallback` → make `fallback` instead, once (the same call without `origin`), then go on as below;
    - success → `dreamem applied Q3-7f2a --result '<short summary of the answer>'`;
    - refused (`changed_since`, not found, any error) → `dreamem failed Q3-7f2a --reason '<what it said>'`, and tell the person
      the question will come back with the current texts.
