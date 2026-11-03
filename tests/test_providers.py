@@ -5,7 +5,7 @@ from pathlib import Path
 
 from dreamem import questions
 
-GOLDEN = Path(__file__).parent / "fixtures" / "holomem-0.7.0-calls.json"
+GOLDEN = Path(__file__).parent / "fixtures" / "holomem-0.10.1-calls.json"
 
 
 def all_calls() -> str:

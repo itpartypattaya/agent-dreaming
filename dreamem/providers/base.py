@@ -94,6 +94,11 @@ class Provider:
         """The call as it is printed (holographic-memory adds the version the person was shown)."""
         return call
 
+    def fallback(self, q: dict, call: dict) -> dict | None:
+        """The same call for an older version of the system, made instead when the store refuses an argument it does
+        not know; None when every version takes the call."""
+        return None
+
     def check(self, q: dict) -> dict:
         """What the agent checks before the calls."""
         return {}

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- A text you give with **changed** or **wrong** is written as yours: `memory_change` and `memory_correct` carry
+  `origin: said` (holographic-memory 0.10.0+). Before, a change was stored as the agent's own claim and a correction
+  kept an agent's `inferred`, so the next night could ask "an agent stored this lately — is it right?" about what you
+  had just said. holographic-memory 0.6–0.9 refuses the unknown argument: `dreamem decide` also prints `fallback`,
+  the same call without `origin`, and the review makes it after such a refusal. Checked against a live
+  holographic-memory 0.10.1 server: all 32 calls the review can print are taken.
+
 ## 0.6.3 — 2026-10-31
 
 - The plugin directory's check blocked 0.6.2: it read the install command in the hook's hint

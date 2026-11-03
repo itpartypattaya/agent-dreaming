@@ -295,6 +295,8 @@ Details: [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md).
   and the next night asks about the pair).
 - A call that changes a fact carries `expect`, the version you were shown; holographic-memory 0.5.0 or newer refuses
   it when the fact changed since the night.
+- A text you give with **changed** or **wrong** is written as yours (`origin: said`), so the next night does not ask
+  about it as an agent's fact.
 
 ## When something does not work
 
@@ -330,6 +332,8 @@ paste it.
   ("Deleted 0 of 1 observations" is a failure). Duplicates between its observations are not asked about yet.
 - An older holographic-memory (before 0.5.0) ignores `expect`: a change then goes through unchecked — update
   holographic-memory.
+- holographic-memory before 0.10.0 does not take `origin` on a change or a correction: the agent then makes the same
+  call without it, and the new text is kept as an agent's (a change) or with the fact's old origin (a correction).
 - Possible new facts come from the last 30 days only, and the filter is tuned for Russian and English.
 - The plugin's hooks are one line for bash (macOS, Linux, Git Bash on Windows) and PowerShell 7. Claude Code on
   Windows without Git Bash and without PowerShell 7 runs them in Windows PowerShell 5.1, which cannot read that line:

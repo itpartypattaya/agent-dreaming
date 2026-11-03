@@ -409,7 +409,8 @@ def answers(q: dict) -> dict:
 
 def decide(q: dict, answer: str, text: str | None = None) -> dict:
     """Record the person's *answer*; returns what to do: ``{"call": {...}, "check": {...}}`` for a memory tool call
-    (``"calls"``: several, in that order; ``"edit"``: a change of a file the agent makes), ``{"local": "reject" |
+    (``"calls"``: several, in that order; ``"edit"``: a change of a file the agent makes; ``"fallback"``: the same call
+    for an older store that refuses an argument it does not know), ``{"local": "reject" |
     "not-duplicates"}`` for the engine's reject list, ``{}`` when nothing is to be done."""
     answer = answer.strip().lower()
     if q.get("status") == GONE:
@@ -450,6 +451,9 @@ def decide(q: dict, answer: str, text: str | None = None) -> dict:
         q["calls"] = [writer.finish(q, c) for c in made]
         return {**todo, "calls": q["calls"], "check": writer.check(q)}
     q["call"] = writer.finish(q, made)
+    fallback = writer.fallback(q, q["call"])  # printed, not kept: the record is the call the answer asked for
+    if fallback is not None:
+        todo["fallback"] = fallback
     return {**todo, "call": q["call"], "check": writer.check(q)}
 
 
