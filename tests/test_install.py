@@ -83,16 +83,32 @@ def test_skill_without_dreamem_gives_the_readme_install_command():
     assert command in skill.split("## When `dreamem` is missing", 1)[1]
 
 
-def test_plugin_manifest_names_its_icon():
-    # The directory's card shows the picture `icon` names; a file in the folder that nothing names is not shown.
+def test_plugin_icon_sits_where_the_directory_looks():
+    # The directory takes the picture from .claude-plugin/icon.png without any field naming it (checked on a scan of
+    # a branch without `icon` on 05.11.2026: no "No icon" warning). It wants a square PNG or JPEG, 512 to 2048 px.
+    import struct
+
+    icon = Path(__file__).resolve().parent.parent / "claude-plugin" / ".claude-plugin" / "icon.png"
+    data = icon.read_bytes()
+    assert data.startswith(b"\x89PNG\r\n\x1a\n")
+    width, height = struct.unpack(">II", data[16:24])
+    assert width == height and 512 <= width <= 2048
+
+
+def test_plugin_manifest_holds_only_what_claude_code_reads():
+    # Claude Code ignores the directory's listing fields, and the directory warns about each one ("Unrecognized field",
+    # "Field from another tool's manifest"). The listing keeps the links it took when the submission was created, so
+    # the manifest does not need them; the README and PRIVACY.md carry them for people.
     import json
 
-    plugin = Path(__file__).resolve().parent.parent / "claude-plugin"
-    manifest = json.loads((plugin / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
-    assert "icon" in manifest
-    icon = (plugin / manifest["icon"]).resolve()
-    assert icon.is_relative_to(plugin.resolve()) and icon.is_file()
-    assert icon.read_bytes().startswith(b"\x89PNG")
+    manifest = json.loads(
+        (Path(__file__).resolve().parent.parent / "claude-plugin" / ".claude-plugin" / "plugin.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    listing_only = {"icon", "documentationUrl", "supportUrl", "privacyPolicyUrl", "termsOfServiceUrl"}
+    assert not listing_only & set(manifest)
+    assert {"name", "version", "description"} <= set(manifest)
 
 
 def test_schedule_specs_run_if_due():
