@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.2 — 2026-11-05
+
+- The plugin manifest holds only what Claude Code reads. The directory's listing fields (documentation, support and
+  privacy links, the picture) are gone from it: Claude Code ignores them, the directory warned about each one, and
+  the listing keeps what it took when the plugin was submitted. The directory still finds the picture in its usual
+  place. The links stay in the README.
+
 ## 0.7.1 — 2026-11-05
 
 - The skill's frontmatter was not valid YAML: the description quoted the line `Dreaming <date>: N memory questions
