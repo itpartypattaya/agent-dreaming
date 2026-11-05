@@ -52,6 +52,25 @@ def test_plugin_skill_is_the_package_skill():
     assert plugin.startswith("---\nname: dream\n")
 
 
+def test_skill_frontmatter_is_strict_yaml():
+    # The plugin directory's scan and Codex read the frontmatter with a strict YAML parser. Claude Code forgives a
+    # broken one, so nothing shows locally, but the directory then "couldn't read part of the plugin cleanly" and holds
+    # every version for a manual review (REACH_UNKNOWN), and a strict reader gets no name or description at all.
+    import yaml
+
+    root = Path(__file__).resolve().parent.parent
+    for path in (root / "dreamem" / "skill" / "SKILL.md", root / "claude-plugin" / "skills" / "dream" / "SKILL.md"):
+        text = path.read_text(encoding="utf-8")
+        _, frontmatter, body = text.split("---\n", 2)
+        meta = yaml.safe_load(frontmatter)
+        assert set(meta) == {"name", "description"}, path
+        assert meta["name"] == "dream"
+        assert isinstance(meta["description"], str) and "\n" not in meta["description"]
+        assert meta["description"].startswith("Go through last night's memory questions")
+        assert "Dreaming <date>" in meta["description"]  # the session-start line still triggers the review
+        assert body.strip()
+
+
 def test_skill_without_dreamem_gives_the_readme_install_command():
     # The directory installs the plugin alone: the skill must tell a person without the program how to get it,
     # with the very command the README gives.
