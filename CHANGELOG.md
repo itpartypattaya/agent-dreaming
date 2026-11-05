@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.1 — 2026-11-05
+
+- The skill's frontmatter was not valid YAML: the description quoted the line `Dreaming <date>: N memory questions
+  wait`, and a colon followed by a space inside a plain YAML value is an error. Claude Code forgives it, so nothing
+  showed locally, but strict readers do not: the plugin directory's scan could not read the skill cleanly and held
+  every version for a manual review ("Couldn't confirm what the plugin runs or connects to"). The description now says
+  the same without that colon; a test reads the frontmatter of both copies of the skill with a strict YAML parser.
+
 ## 0.7.0 — 2026-11-03
 
 - Basic Memory as an optional read-only source: with `[providers.basic-memory] enabled = true, path = "..."` in

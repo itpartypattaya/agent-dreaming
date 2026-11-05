@@ -1,6 +1,6 @@
 ---
 name: dream
-description: Go through last night's memory questions of agent-dreaming with the person — duplicates to merge, facts that may be outdated or wrong, facts an agent stored that nobody confirmed, Claude Code memory notes nobody mentioned lately or that repeat what is kept — and apply each answer through the memory system's own tools (holographic-memory, MCP memory) or an edit of the Claude Code note, only on the person's word. Use when the person says "dream", "dreaming", "memory questions", "разбери сон", "вопросы по памяти", or when a session starts with a line "Dreaming <date>: N memory questions wait" and the person wants to go through them. Also to run the pass by hand ("сделай проход сейчас", "run dreaming now").
+description: Go through last night's memory questions of agent-dreaming with the person — duplicates to merge, facts that may be outdated or wrong, facts an agent stored that nobody confirmed, Claude Code memory notes nobody mentioned lately or that repeat what is kept — and apply each answer through the memory system's own tools (holographic-memory, MCP memory) or an edit of the Claude Code note, only on the person's word. Use when the person says "dream", "dreaming", "memory questions", "разбери сон", "вопросы по памяти", or when a session starts with a "Dreaming <date>" line that says how many memory questions wait and the person wants to go through them. Also to run the pass by hand ("сделай проход сейчас", "run dreaming now").
 ---
 
 # Dreaming: the review
