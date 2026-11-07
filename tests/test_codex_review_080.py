@@ -60,7 +60,7 @@ def test_the_task_is_told_it_does_not_carry_folders_set_in_this_terminal(world, 
     out = io.StringIO()
     install.install_schedule(world.homes, remove=False, dry_run=True, out=out)
     assert "DREAMEM_HOME" in out.getvalue()
-    assert "does not carry" in out.getvalue()
+    assert "will not see" in out.getvalue()
 
 
 @pytest.mark.parametrize("platform", ["win32", "darwin"])
