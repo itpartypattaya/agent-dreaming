@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.3 — 2026-11-07
+
+- The 0.8.2 warning about folder variables was false on Windows when the variable is set for the user account (as
+  `CODEX_HOME` often is): Task Scheduler gives the task the account's variables, so it sees it. The warning now names
+  only variables set in the terminal alone, or set for the account with another value.
+
 ## 0.8.2 — 2026-11-07
 
 Fixes from a Codex review of 0.8.0–0.8.1; the daily task now runs the pass for Claude Code, so each could leave a

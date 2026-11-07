@@ -385,6 +385,31 @@ def pass_starters(homes: Homes) -> list[str]:
     return found
 
 
+def account_variable(name: str) -> str | None:
+    """A variable as the user account keeps it, which is what Task Scheduler gives the task: Windows' user, then
+    system environment. Elsewhere None: launchd and systemd user units do not read a shell's profile."""
+    if sys.platform != "win32":
+        return None
+    import winreg
+
+    for root, key in ((winreg.HKEY_CURRENT_USER, "Environment"),
+                      (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")):
+        try:
+            with winreg.OpenKey(root, key) as k:
+                value, _kind = winreg.QueryValueEx(k, name)
+            return os.path.expandvars(str(value))
+        except OSError:
+            continue
+    return None
+
+
+def _same_path(a: str, b: str | None) -> bool:
+    if b is None:
+        return False
+    norm = lambda p: os.path.normcase(os.path.abspath(os.path.expanduser(p)))  # noqa: E731
+    return norm(a) == norm(b)
+
+
 def schedule_spec(platform: str | None = None, at: str = "04:00") -> tuple[str, str]:
     """(file name, content) of the daily job for this platform, at *at* (HH:MM, local time)."""
     platform = platform or sys.platform
@@ -441,11 +466,13 @@ def install_schedule(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdou
                   "delete ~/.config/systemd/user/agent-dreaming.service and agent-dreaming.timer.", file=out)
         return 0
     if not remove:
-        carried = [v for v in FOLDER_VARIABLES if os.environ.get(v)]
-        if carried:
-            print(f"warning: {', '.join(carried)} set here: the daily task does not carry them; it runs with the "
-                  "folders of a plain session. Set them for your user account (not only in this terminal) or leave "
-                  "them out.", file=out)
+        unseen = [v for v in FOLDER_VARIABLES if os.environ.get(v) and not _same_path(os.environ[v],
+                                                                                         account_variable(v))]
+        if unseen:
+            print(f"warning: {', '.join(unseen)} set in this terminal only: the daily task will not see "
+                  f"{'it' if len(unseen) == 1 else 'them'} and reads the usual folders instead. Set "
+                  f"{'it' if len(unseen) == 1 else 'them'} for your user account, or leave "
+                  f"{'it' if len(unseen) == 1 else 'them'} out.", file=out)
     if sys.platform != "win32":
         print(f"{name}:\n{content}", file=out)
         print("Put these files in place and enable them yourself (launchctl load / systemctl --user enable --now "

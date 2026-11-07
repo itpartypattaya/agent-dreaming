@@ -351,8 +351,9 @@ paste it.
   instead of the first session after `dream_time`; when the computer is off at that time, the task runs once it is on
   again (Windows, systemd) or at the next time (launchd).
 - The daily task runs with your user account's settings, not with variables set only in the terminal you installed
-  from: with `DREAMEM_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HOLOMEM_HOME` or `DREAMEM_GEMINI_DIR` set there, the
-  install warns, and the task reads the usual folders unless those variables are set for your account.
+  from: when `DREAMEM_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HOLOMEM_HOME` or `DREAMEM_GEMINI_DIR` is set there but
+  not for your account (on Windows: the user or system environment), the install warns, and the task reads the usual
+  folders. On macOS and Linux the task never sees a shell's variables.
 
 ## Licence
 
