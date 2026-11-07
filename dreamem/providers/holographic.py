@@ -60,8 +60,10 @@ ANSWERS = {
     # an answer that used it went wrong, by the agent's own report in holographic-memory's journal
     "outcome": {"keep": _feedback("confirmed"), "outdated": _end, "changed": _change("memory_change"),
                 "wrong": _change("memory_correct"), "forget": _forget},
+    # "keep": the fact holds — confirmed, as a relevance question's "keep" (it wrote nothing before 0.8.4, so the
+    # same conflict came back after its cooldown with nothing to tell it was answered)
     "conflict": {"changed": _change("memory_change"), "outdated": _end, "wrong": _change("memory_correct"),
-                 "keep": NOTHING},
+                 "keep": _feedback("confirmed")},
     "duplicate": {"yes": _merge, "not-duplicates": NOT_DUPLICATES},
     # a possible new fact: the review agent judges it first; "save" adds the fact the agent worded and the person
     # approved; the rest are kept so the same clause is not offered again (`no` for CANDIDATE_REST_DAYS)
