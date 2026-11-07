@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.1 — 2026-11-07
+
+- `dreamem install claude-code --run` brings a plugin that is already installed up to date. `claude plugin install`
+  does nothing when the plugin is there, so after updating the program the old plugin stayed — with the hooks 0.8.0
+  took out. It now also runs `claude plugin marketplace update agent-dreaming` and
+  `claude plugin update agent-dreaming@agent-dreaming` (both do nothing when there is nothing new).
+
 ## 0.8.0 — 2026-11-07
 
 - **The Claude Code plugin has no hooks any more.** Since November 2026 the Anthropic plugin directory refuses hooks

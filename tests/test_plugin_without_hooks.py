@@ -97,3 +97,17 @@ def test_the_skill_says_how_the_pass_starts_without_hooks(copy):
     assert "`nightly run:`" in section and "nothing starts it" in section
     assert "dreamem install schedule" in section
     assert "only if" in section.lower() or "on their yes" in section.lower()
+
+
+def test_install_claude_code_brings_an_installed_plugin_up_to_date(world, monkeypatch):
+    # `claude plugin install` on a plugin that is already there does nothing ("already installed"), so after updating
+    # the program a person running `dreamem install claude-code --run` kept the old plugin — with its hooks.
+    c = Calls()
+    monkeypatch.setattr(install.subprocess, "run", c)
+    monkeypatch.setattr(install.shutil, "which", lambda name: "/usr/bin/claude" if name == "claude" else None)
+    assert install.install_claude(world.homes, remove=False, dry_run=False, run_it=True, out=io.StringIO()) == 0
+    plugin_cmds = [cmd[1:] for cmd in c.seen if cmd[0] == "/usr/bin/claude"]
+    assert plugin_cmds == [["plugin", "marketplace", "add", "itpartypattaya/agent-dreaming"],
+                           ["plugin", "marketplace", "update", "agent-dreaming"],
+                           ["plugin", "install", "agent-dreaming@agent-dreaming"],
+                           ["plugin", "update", "agent-dreaming@agent-dreaming"]]
