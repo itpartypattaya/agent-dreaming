@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.8.3 — 2026-11-07
+
+- The 0.8.2 warning about folder variables was false on Windows when the variable is set for the user account (as
+  `CODEX_HOME` often is): Task Scheduler gives the task the account's variables, so it sees it. The warning now names
+  only variables set in the terminal alone, or set for the account with another value.
+
+Fixes from a Fable review of 0.8.0–0.8.2:
+
+- The Windows task runs `pythonw.exe` when the interpreter has it (the uv tool's does): no console window opens at
+  night. It runs while you are logged on; README no longer promises more.
+- After the plugin's update to 0.8 without `dreamem install claude-code`, no night came and nothing said why: the
+  `nightly run: nothing starts it on its own` line was only in `dreamem status`. `dreamem show`, where every review
+  starts, prints it too.
+- `--uninstall` on a computer without the task no longer fails: it says there is no daily task.
+- The scheduler's answer is read in the console's OEM code page, so it is readable from an agent's shell too.
+- On macOS and Linux the task counts only when launchd or systemd has it loaded, not when its file merely lies there.
+- `install claude-code --time` no longer tells you to run `install schedule` again; `config time` says the task keeps
+  the time it was made with.
+- `claude plugin` taking longer than 120 s is reported as a failure, not a traceback.
+- Texts from 0.7 that spoke of the plugin's hook asking for a time are gone.
+
 ## 0.8.2 — 2026-11-07
 
 Fixes from a Codex review of 0.8.0–0.8.1; the daily task now runs the pass for Claude Code, so each could leave a
@@ -29,7 +50,7 @@ person without a night:
   status cannot be asked for yet. The plugin is now the review skill alone.
 - `dreamem install claude-code` sets up the daily task that runs the nightly pass for Claude Code (Task Scheduler on
   Windows; on macOS and Linux it prints the launchd or systemd files), asking for the time in a terminal;
-  `--uninstall` removes the plugin and the task. **Updating from 0.7 or older: run `dreamem install claude-code` once**
+  `--uninstall` removes the task and prints the plugin's removal (`--run` runs it). **Updating from 0.7 or older: run `dreamem install claude-code` once**
   — without it, nothing runs the pass on a computer where only Claude Code is used.
 - A Claude Code session no longer starts with the "Dreaming …: N memory questions wait" line. Ask for the review, or
   look at `dreamem status`. Codex and Antigravity keep their hooks and the line.

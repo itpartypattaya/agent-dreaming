@@ -60,7 +60,7 @@ def test_the_task_is_told_it_does_not_carry_folders_set_in_this_terminal(world, 
     out = io.StringIO()
     install.install_schedule(world.homes, remove=False, dry_run=True, out=out)
     assert "DREAMEM_HOME" in out.getvalue()
-    assert "does not carry" in out.getvalue()
+    assert "will not see" in out.getvalue()
 
 
 @pytest.mark.parametrize("platform", ["win32", "darwin"])
@@ -108,3 +108,17 @@ def test_a_preview_of_install_claude_code_shows_the_time_given(world, monkeypatc
     shown = capsys.readouterr().out
     assert install.schedule_spec(at="23:15")[1] in shown
     assert calls.seen == []
+
+
+def test_no_warning_for_a_folder_variable_the_account_already_has(world, monkeypatch, calls):
+    # 0.8.2 warned about CODEX_HOME on a computer where it is set for the user account (Windows: HKCU\Environment):
+    # Task Scheduler starts the task with the account's variables, so the task sees it — the warning was false.
+    monkeypatch.setenv("CODEX_HOME", str(world.homes.codex))
+    monkeypatch.setattr(install, "account_variable", lambda name: str(world.homes.codex) if name == "CODEX_HOME" else None)
+    out = io.StringIO()
+    install.install_schedule(world.homes, remove=False, dry_run=True, out=out)
+    assert "CODEX_HOME" not in out.getvalue()
+    monkeypatch.setattr(install, "account_variable", lambda name: str(world.root / "elsewhere"))
+    out = io.StringIO()
+    install.install_schedule(world.homes, remove=False, dry_run=True, out=out)
+    assert "CODEX_HOME" in out.getvalue()  # the account has another value: the task would read another folder

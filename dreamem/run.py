@@ -433,7 +433,7 @@ def status(homes: Homes, out=sys.stdout) -> int:
 
     starters = install.pass_starters(homes)
     print("nightly run: " + (", ".join(starters) if starters else
-                                  "nothing starts it on its own — run `dreamem install schedule`"), file=out)
+                                  install.NOTHING_RUNS.split(": ", 1)[1]), file=out)
     for w in warnings:
         print(f"warning: {w}", file=out)
     return 0
