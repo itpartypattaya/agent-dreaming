@@ -933,7 +933,32 @@ class Memory(namedtuple("Memory", "notes dedupe")):
     def __new__(cls, notes=(), dedupe=()):
         def clean(items):
             return tuple(t for t in ((s or "").replace(MEMORY_ENTRY_DELIMITER, "\n").strip() for s in items) if t)
-        return super().__new__(cls, clean(notes), clean(dedupe))
+        return super().__new__(cls, clean(notes), clean(u for doc in dedupe for u in passages(doc)))
+
+
+_BLANK_LINE_RE = re.compile(r"\n[ \t]*\n")
+_ITEM_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)]|\|)\s")
+
+
+def passages(doc):
+    """The comparison units of a document that is only compared against (a file of rules, Codex memory): its
+    paragraphs, and each item of a list or row of a table. A whole document matched any fact whose words it held
+    somewhere — "already in memory" for 12 of Anton's facts, and a "conflict" with its hundreds of numbers (07.11.2026).
+    A Claude Code note stays whole: it is one entry, asked about as such."""
+    out = []
+    for para in _BLANK_LINE_RE.split((doc or "").replace("\r\n", "\n").replace("\r", "\n")):
+        lines = [line for line in para.split("\n") if line.strip()]
+        if sum(1 for line in lines if _ITEM_RE.match(line)) < 2:
+            out.append("\n".join(lines))
+            continue
+        unit = []
+        for line in lines:
+            if _ITEM_RE.match(line) and unit:
+                out.append("\n".join(unit))
+                unit = []
+            unit.append(line)
+        out.append("\n".join(unit))
+    return [u.strip() for u in out if u.strip()]
 
 
 def _memory_entries(text):
@@ -2397,6 +2422,40 @@ def recent_confirmations(db, rest_days=CONFIRM_REST_DAYS, now=None):
         return None
 
 
+def confirmed_facts(db):
+    """Fact ids whose current text a person stands behind: a confirmation at or after the current version was recorded
+    (a version without a recorded time counts as confirmed by any confirmation), or `confirmed` as the current
+    version's origin. None when the store keeps neither (holographic older than 0.15.0). Read-only.
+
+    Such a fact is not offered as "mark as confirmed?" again: the person already said so (Anton, 07.11.2026 — the same
+    facts were confirmed on 02.11 and again on 06.11 or 07.11). A new text of the fact is not what they confirmed."""
+    if not db or not os.path.exists(db):
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            versions = _table_columns(conn, "fact_versions")
+            if not versions:
+                return None
+            out = set()
+            if "src_origin" in versions:
+                out |= {r[0] for r in conn.execute(
+                    "SELECT fact_id FROM fact_versions WHERE status = 'current' AND src_origin = 'confirmed'")}
+            if _table_columns(conn, "fact_confirmations"):
+                out |= {r[0] for r in conn.execute(
+                    "SELECT DISTINCT c.fact_id FROM fact_confirmations c JOIN fact_versions v"
+                    " ON v.fact_id = c.fact_id AND v.status = 'current'"
+                    " WHERE v.recorded_at IS NULL OR v.recorded_at = ''"
+                    " OR julianday(c.confirmed_at) >= julianday(v.recorded_at)")}
+            elif "src_origin" not in versions:
+                return None
+            return out
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+
+
 _NOT_READ = object()  # "the caller did not read the confirmations" (not the YAML scanner's _UNREAD)
 
 
@@ -3543,13 +3602,35 @@ def _score_facts(facts, all_messages, by_store, rejected, memory_text, staged_te
     return scored
 
 
-def _select_promotions(safe, seen_promotions, now):
+# The sections a person answers about a fact in (not new_facts or keywords_needed: those the agent sorts itself).
+ASKED_SECTIONS = ("promotions", "conflicts", "fact_decays", "confirm", "trust_feedback")
+
+
+def asked_lately(seen, now, days=None):
+    """Fact ids a person was asked about in any section within *days* (the promotion cooldown): each section rests
+    on its own, so a fact answered as a promotion came back as a conflict or a confirm the next night (#57 and #67,
+    06.11.2026; a conflict's "keep" writes nothing, so no confirmation guarded it either). Only acknowledged nights
+    are in *seen*."""
+    rest = timedelta(days=SETTINGS.PROMOTION_COOLDOWN_DAYS if days is None else days)
+    out = set()
+    for name in ASKED_SECTIONS:
+        for entry in (seen.get(name) or {}).values():
+            at = _parse_iso(entry.get("at")) if isinstance(entry, dict) else None
+            if at and entry.get("fact_id") is not None and now - at < rest:
+                out.add(entry["fact_id"])
+    return out
+
+
+def _select_promotions(safe, seen_promotions, now, confirmed=None):
     """(promotions, their hidden store twins, one-off events, how many rest after a recent showing): facts over
-    the score gate, corroborated, not in memory or staged; dated one-off events go to their own section."""
+    the score gate, corroborated, not in memory or staged, and not already confirmed by a person (*confirmed*:
+    fact ids, see `confirmed_facts`); dated one-off events go to their own section."""
+    confirmed = confirmed or frozenset()
     promotion_candidates = [
         s for s in safe
         if s["score"] >= SETTINGS.MIN_SCORE and promotion_ready(s)
         and not s["in_memory"] and not s["staged"]
+        and s.get("fact_id") not in confirmed and s.get("origin") != "confirmed"
     ]
     # Short rest after a promotion was actually shown (and the night acked): a
     # candidate the agent could not write — approval gate, budget, a refusal —
@@ -3566,15 +3647,19 @@ def _select_promotions(safe, seen_promotions, now):
     return promotions, promotions_dups, ephemeral_events, promotions_suppressed
 
 
-def _conflict_candidates(safe, promoted_ids, memory_text):
-    """Facts that may update a memory entry (same subject, other numbers), each with its `conflicts`."""
+def _conflict_candidates(safe, promoted_ids, memory_text, rested=frozenset(), notes_text=""):
+    """Facts that may update a memory entry (same subject, other numbers), each with its `conflicts`. A fact a
+    person confirmed lately (*rested*) is compared only with the Claude Code notes (*notes_text*): they just said it
+    holds, so a file of rules the review never edits disagreeing with it is not a question for them; a note may be the
+    stale side, and the review can fix it."""
     conflicts_pending = []
     for s in safe:
         if s["fact_id"] in promoted_ids:
             continue
         if is_ephemeral_fact(s["content"]) or exact_or_alias_in_memory(s["content"], memory_text):
             continue
-        hits = find_conflicts(s["content"], memory_text)
+        against = notes_text if s["fact_id"] in rested else memory_text
+        hits = find_conflicts(s["content"], against) if against else []
         if hits:
             conflicts_pending.append({**s, "conflicts": hits})
     return conflicts_pending
@@ -3626,7 +3711,8 @@ BUCKETS = ("new_facts", "fact_decays", "conflicts", "promotions", "trust_feedbac
 
 class DecisionInputs(namedtuple("DecisionInputs", "now today window_days rules facts messages by_store memory_text "
                                 "staged_text pending_writes rejected recent_confirmations feedback_floor "
-                                "fact_source seen messages_unavailable")):
+                                "fact_source seen messages_unavailable confirmed notes_text",
+                                defaults=(None, ""))):
     """Everything the night's decisions read from the world, read once. `_decide` reads nothing else — no clock,
     database, environment or file; it reads the settings, which must not change while it runs
     (`settings_fingerprint`). `seen` is a copy: deciding never marks anything shown. `recent_confirmations`: a
@@ -3645,6 +3731,7 @@ def load_inputs(window_days, memory, messages, rejected_state_path=None, seen=No
     now = now or _now()
     source = fact_source()
     rested = recent_confirmations(fact_store_path(), now=now) if source == "holographic" else None
+    confirmed = confirmed_facts(fact_store_path()) if source == "holographic" else None
     return DecisionInputs(
         now=now, today=now.astimezone(SETTINGS.LOCAL_TZ).date(), window_days=window_days,
         rules=rules_context(f.get("content") for f in facts),
@@ -3654,7 +3741,9 @@ def load_inputs(window_days, memory, messages, rejected_state_path=None, seen=No
         rejected=types.MappingProxyType(load_rejected(rejected_state_path)),
         recent_confirmations=None if rested is None else frozenset(rested),
         feedback_floor=feedback_floor(source), fact_source=source,
-        seen=copy.deepcopy(seen or {}), messages_unavailable=False)
+        seen=copy.deepcopy(seen or {}), messages_unavailable=False,
+        confirmed=None if confirmed is None else frozenset(confirmed),
+        notes_text=MEMORY_ENTRY_DELIMITER.join(memory.notes))
 
 
 class Decisions(namedtuple("Decisions", "scored suppressed quarantined expired expired_ids new_facts_window "
@@ -3720,6 +3809,9 @@ def _decide(inputs, vetoes=frozenset()):
     expired = [s for s in safe if is_expired_event(s["content"], today=inputs.today)]
     expired_ids = {s["fact_id"] for s in expired}
     safe = [s for s in safe if s["fact_id"] not in expired_ids]
+    # What the person is asked about: not a fact they answered about in another section a night or two ago.
+    rested_ids = asked_lately(inputs.seen, now)
+    askable = [s for s in safe if s["fact_id"] not in rested_ids]
 
     # Every fact created or reinforced during the window is surfaced for a
     # separate profile review — not pre-filtered by score (a stable preference
@@ -3734,7 +3826,7 @@ def _decide(inputs, vetoes=frozenset()):
     new_facts.sort(key=lambda s: (s["meta"]["days_old"], -s["score"]))
 
     promotions, promotions_dups, ephemeral_events, promotions_suppressed = _select_promotions(
-        safe, seen_promotions, now)
+        askable, seen_promotions, now, confirmed=inputs.confirmed)
     staged_suppressed = sum(1 for s in safe if s.get("staged"))
     # A fact already offered as a promotion is not repeated in new_facts: the
     # agent reviews it once (live case: 8 extracted facts arrived in both
@@ -3758,13 +3850,17 @@ def _decide(inputs, vetoes=frozenset()):
     # arrives with its own `nearest_entry`, so the agent sees the possible
     # update once, in one section (the head-match fix surfaced eight sibling
     # facts at once, each doubled as a "conflict" with an unrelated sibling).
-    conflicts_pending = _conflict_candidates(safe, promoted_ids, memory_text)
+    rested_confirmed = inputs.recent_confirmations or frozenset()
+    conflicts_pending = _conflict_candidates(askable, promoted_ids, memory_text, rested=rested_confirmed,
+                                             notes_text=inputs.notes_text)
     conflicts = unseen(conflicts_pending, seen_conflicts, now)
     conflicts_suppressed = len(conflicts_pending) - len(conflicts)
     conflicts.sort(key=lambda s: -s["score"])
 
     # "Nobody mentioned it" is unknown on a night the messages could not be read: no relevance question then.
-    decays_pending = [] if inputs.messages_unavailable else _decay_candidates(safe, window_days)
+    # A fact confirmed lately is not asked whether it still holds: the person just said so.
+    decays_pending = [] if inputs.messages_unavailable else _decay_candidates(
+        [s for s in askable if s["fact_id"] not in rested_confirmed], window_days)
     decays = unseen(decays_pending, seen_fact_decays, now)
     decays_suppressed = len(decays_pending) - len(decays)
     decays.sort(key=lambda s: -s["meta"]["days_old"])
@@ -3795,6 +3891,7 @@ def _decide(inputs, vetoes=frozenset()):
     confirm_pending = confirm_items(safe, all_messages, by_store, source, rules=inputs.rules, now=now,
                                     veto=vetoes, rested=inputs.recent_confirmations,
                                     counted=counted["confirm"])
+    confirm_pending = [c for c in confirm_pending if c.get("fact_id") not in rested_ids]
     confirm = unseen(confirm_pending, seen_confirm, now, key=_feedback_key)[:CONFIRM_CAP]
 
 

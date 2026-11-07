@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.8.4 — 2026-11-07
+
+Fewer and truer questions (Anton: confirmed facts came back every few days, and "conflicts" appeared where there were
+none). Found in the store's own record: facts #35, #36, #38 were confirmed on 02.11 and again on 07.11, #41 and #43 on
+02.11 and 06.11, #64 on 05.11 and 07.11.
+
+- A fact whose current text you confirmed is not offered as "people keep saying it — mark as confirmed?" again; before,
+  only a 3-day rest held it back. A fact of unknown origin confirmed through "corroborated — confirm?" no longer comes
+  back as a promotion either. A new text of the fact may be asked about.
+- A fact you answered about in one section is not asked about in another for 3 days (a promotion in the morning and a
+  conflict that night, or a conflict's "keep" followed by "said again — confirm?").
+- "keep" on a conflict now confirms the fact (`memory_feedback confirmed`), as the README always said; it wrote
+  nothing, so the same conflict came back after its cooldown.
+- A fact confirmed within 30 days is not asked "still true?" and not set against a file of rules or Codex memory; a
+  Claude Code note that disagrees with it still is.
+- Files of rules and Codex memory are compared by paragraph and list item. As one block, a long file matched any
+  fact whose words it held somewhere: "conflicts" with its hundreds of numbers, and 12 of Anton's facts wrongly
+  "already in memory", so never offered — expect a few honest questions about such facts once.
+- A file saved with Windows line ends (CRLF) is split into paragraphs too: `~/.claude/CLAUDE.md` was read as one
+  paragraph, and one secret word in it took the whole file out of the comparison.
+
 ## 0.8.3 — 2026-11-07
 
 - The 0.8.2 warning about folder variables was false on Windows when the variable is set for the user account (as

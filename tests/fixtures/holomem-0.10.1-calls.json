@@ -87,10 +87,33 @@
  },
  "conflict/keep": {
   "answer": "keep",
-  "call": null,
+  "call": {
+   "args": {
+    "action": "confirmed",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7
+   },
+   "tool": "memory_feedback"
+  },
   "status": "decided",
   "text": "new text",
-  "todo": {}
+  "todo": {
+   "call": {
+    "args": {
+     "action": "confirmed",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_feedback"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   }
+  }
  },
  "conflict/later": {
   "answer": null,

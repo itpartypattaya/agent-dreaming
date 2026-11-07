@@ -89,6 +89,12 @@ Any question also takes **later**. What each answer does in memory:
 - **no** — for an unconfirmed fact: marked unhelpful; for a possible new fact: asked again in a month at the earliest.
 - **never** / **not-a-fact** / **already-stored** — a possible new fact is not offered again (the last two are the agent's own verdicts, never shown to you).
 
+What is not asked again: a fact whose current text you confirmed is never offered as "mark as confirmed?" (a new text
+of it may be); a fact you answered about in one section is not asked about in another for 3 days; a fact you confirmed
+within 30 days is not asked "still true?" and not set against a file of rules or Codex memory (a Claude Code note
+that disagrees still is: the note may be the stale side). Long files — `CLAUDE.md`, `AGENTS.md`, Codex memory — are
+compared paragraph by paragraph and list item by list item, not as one block.
+
 ### Possible new facts
 
 ![Possible new facts: during the night a wide filter finds clauses about you or your people that memory does not hold and keeps only a reference with keyed digests; in the review the message is read again from the session file, the agent judges it, and only a real fact is put to you](docs/diagrams/new-facts.svg)

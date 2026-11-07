@@ -49,7 +49,8 @@ def notes(items: list[Note]) -> tuple[list[Note], dict]:
 def dedupe_targets(items: list[Note]) -> tuple[list[Note], int]:
     out, dropped = [], 0
     for n in items:
-        paragraphs = [p for p in n.text.split("\n\n")]
+        # A file saved on Windows has CRLF: without this it was one paragraph, and one secret in it took the whole file.
+        paragraphs = n.text.replace("\r\n", "\n").replace("\r", "\n").split("\n\n")
         safe = [p for p in paragraphs if engineapi.classify(p) != "secret"]
         dropped += len(paragraphs) - len(safe)
         text = "\n\n".join(safe).strip()
