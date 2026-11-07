@@ -30,9 +30,11 @@ import shutil
 import subprocess
 import sys
 import time
+import re
 import tomllib
 from importlib import resources
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 from . import config
 from .paths import Homes
@@ -43,6 +45,8 @@ MARKETPLACE = "itpartypattaya/agent-dreaming"
 MARKETPLACE_NAME = "agent-dreaming"  # the name in .claude-plugin/marketplace.json
 PLUGIN = f"agent-dreaming@{MARKETPLACE_NAME}"
 TASK = "agent-dreaming"
+# Where the program finds its folders (paths.homes); a task the system starts sees only the user's own settings.
+FOLDER_VARIABLES = ("DREAMEM_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "HOLOMEM_HOME", "DREAMEM_GEMINI_DIR")
 SKILL_MARK = "dreamem decide"  # in our skill's text, in no other skill's: what install may replace or remove
 
 
@@ -318,7 +322,7 @@ def install_antigravity(homes: Homes, *, remove: bool, dry_run: bool, out=sys.st
 
 
 def install_claude(homes: Homes, *, remove: bool, dry_run: bool, run_it: bool, out=sys.stdout,
-                   prompt=_interactive) -> int:
+                   prompt=_interactive, at: str | None = None) -> int:
     # `install` on a plugin already there does nothing, so an installed plugin is brought up to date by `update`; both
     # answer 0 when there is nothing to do (checked on Claude Code 2.1.x).
     cmds = ([["claude", "plugin", "uninstall", PLUGIN]] if remove else
@@ -341,7 +345,7 @@ def install_claude(homes: Homes, *, remove: bool, dry_run: bool, run_it: bool, o
               file=out)
         if not dry_run:
             ask_time(homes, prompt, out)
-    return install_schedule(homes, remove=remove, dry_run=dry_run, out=out)
+    return install_schedule(homes, remove=remove, dry_run=dry_run, out=out, at=at)
 
 
 def scheduled(homes: Homes) -> bool:
@@ -349,7 +353,12 @@ def scheduled(homes: Homes) -> bool:
     instructions put it (this program does not enable it there, so the file is all it can see)."""
     try:
         if sys.platform == "win32":
-            return subprocess.run(["schtasks", "/Query", "/TN", TASK], capture_output=True, timeout=30).returncode == 0
+            found = subprocess.run(["schtasks", "/Query", "/TN", TASK, "/XML"], capture_output=True, timeout=30)
+            if found.returncode != 0:
+                return False
+            # A task switched off in Task Scheduler is still there but runs nothing: its <Settings> say so.
+            settings = re.search(rb"<Settings>.*?</Settings>", found.stdout or b"", re.S)
+            return not (settings and re.search(rb"<Enabled>\s*false\s*</Enabled>", settings.group(0)))
         if sys.platform == "darwin":
             return (Path.home() / "Library" / "LaunchAgents" / "com.agent-dreaming.plist").is_file()
         return (Path.home() / ".config" / "systemd" / "user" / "agent-dreaming.timer").is_file()
@@ -362,13 +371,14 @@ def pass_starters(homes: Homes) -> list[str]:
     found = ["daily task"] if scheduled(homes) else []
     codex = homes.codex / "config.toml"
     try:
-        if codex.is_file() and _our_hooks(codex.read_text(encoding="utf-8")):
-            found.append("Codex hooks")
+        ours_there = _our_hooks(codex.read_text(encoding="utf-8")) if codex.is_file() else None
+        if any("--async" in str(hook.get("command", "")) for _i, _j, hook in ours_there or []):
+            found.append("Codex hooks")  # the background one runs the pass; the other only shows the summary
     except (OSError, UnicodeDecodeError):
         pass
     try:
         hooks = json.loads((homes.gemini / "config" / "hooks.json").read_text(encoding="utf-8"))
-        if isinstance(hooks, dict) and any(ours(hooks.get(name)) for name in AG_HOOKS):
+        if isinstance(hooks, dict) and ours(hooks.get(AG_HOOKS[1])):  # the one that starts the pass
             found.append("Antigravity hooks")
     except (OSError, ValueError):
         pass
@@ -380,7 +390,7 @@ def schedule_spec(platform: str | None = None, at: str = "04:00") -> tuple[str, 
     platform = platform or sys.platform
     hour, minute = config.dream_time(at) or (4, 0)
     if platform == "win32":
-        python = str(Path(sys.executable))
+        python = escape(str(Path(sys.executable)))  # an `&` in the path would break the XML (Codex review of 0.8)
         return (f"{TASK}.xml", f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>agent-dreaming: the nightly memory review (read-only)</Description></RegistrationInfo>
@@ -397,7 +407,7 @@ def schedule_spec(platform: str | None = None, at: str = "04:00") -> tuple[str, 
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>com.agent-dreaming</string>
-  <key>ProgramArguments</key><array><string>{python_path()}</string><string>-I</string><string>-m</string>
+  <key>ProgramArguments</key><array><string>{escape(python_path())}</string><string>-I</string><string>-m</string>
     <string>dreamem</string><string>run</string><string>--if-due</string></array>
   <key>StartCalendarInterval</key><dict><key>Hour</key><integer>{hour}</integer><key>Minute</key><integer>{minute}</integer></dict>
 </dict></plist>
@@ -422,6 +432,20 @@ def install_schedule(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdou
     """*at*: a time given on the command line (a ``--dry-run`` previews it without keeping it); else the setting."""
     chosen = at or config.load(homes)[0].get("dream_time")
     name, content = schedule_spec(at=chosen if config.dream_time(chosen) else "04:00")
+    if sys.platform != "win32" and remove:
+        if sys.platform == "darwin":
+            print("Stop and remove the daily task yourself: launchctl unload "
+                  "~/Library/LaunchAgents/com.agent-dreaming.plist, then delete that file.", file=out)
+        else:
+            print("Stop and remove the daily task yourself: systemctl --user disable --now agent-dreaming.timer, then "
+                  "delete ~/.config/systemd/user/agent-dreaming.service and agent-dreaming.timer.", file=out)
+        return 0
+    if not remove:
+        carried = [v for v in FOLDER_VARIABLES if os.environ.get(v)]
+        if carried:
+            print(f"warning: {', '.join(carried)} set here: the daily task does not carry them; it runs with the "
+                  "folders of a plain session. Set them for your user account (not only in this terminal) or leave "
+                  "them out.", file=out)
     if sys.platform != "win32":
         print(f"{name}:\n{content}", file=out)
         print("Put these files in place and enable them yourself (launchctl load / systemctl --user enable --now "
