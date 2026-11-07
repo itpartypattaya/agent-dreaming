@@ -25,7 +25,8 @@ It changed nothing. Your job here is to put the questions to the person and carr
 
 1. Run `dreamem show` (it marks the questions as shown). If it says there are none, say so in one line and stop.
    If the command is not found, see "When `dreamem` is missing" below.
-   No night yet, or the person asks for a fresh one: `dreamem run` (seconds), then `dreamem show`.
+   No night yet, or the person asks for a fresh one: `dreamem run` (seconds), then `dreamem show`. No night for
+   days: see "When no pass runs on its own" below.
 2. For each question, ask it plainly. Sections and the answers each takes:
    - `duplicate` [D-n] — two facts look like one: **yes** (merge) / **not-duplicates**.
    - `external_duplicate` — two MCP observations look alike: **drop-copy** deletes the second observation only,
@@ -104,9 +105,19 @@ program on their computer, installed once with Python 3.11+ and [uv](https://doc
 uv tool install git+https://github.com/itpartypattaya/agent-dreaming
 ```
 
-then a new session (the first pass runs at its start). Say also that it works only where the agent runs commands on
+then, in Claude Code, `dreamem install claude-code` once: it sets up the daily task that runs the nightly pass (in
+Codex: `dreamem install codex`, in Antigravity: `dreamem install antigravity`). Say also that it works only where the agent runs commands on
 their computer — Claude Code, Codex CLI, Antigravity — not in the claude.ai chat or Cowork. Run the command only if
 they ask you to.
+
+## When no pass runs on its own
+
+The plugin has no session hooks (the Anthropic directory takes none), so in Claude Code the nightly pass runs from a
+daily task of the computer, or from Codex's or Antigravity's hooks. If `dreamem show` finds no night, or the last night
+is days old, run `dreamem status` and read its line `pass starts from:`. When it says nothing starts the pass, tell
+the person in one or two lines: no pass runs by itself on this computer, and `dreamem install schedule` sets up the
+daily task (Windows: Task Scheduler; on macOS and Linux it prints the files to put in place). Run it only if they say
+yes. A pass now is `dreamem run` (seconds), then `dreamem show`.
 
 ## When the memory tools are missing
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.0 — 2026-11-07
+
+- **The Claude Code plugin has no hooks any more.** Since November 2026 the Anthropic plugin directory refuses hooks
+  of any type from organizations that are not Verified (it refused 0.7.2 for its two session-start hooks), and that
+  status cannot be asked for yet. The plugin is now the review skill alone.
+- `dreamem install claude-code` sets up the daily task that runs the nightly pass for Claude Code (Task Scheduler on
+  Windows; on macOS and Linux it prints the launchd or systemd files), asking for the time in a terminal;
+  `--uninstall` removes the plugin and the task. **Updating from 0.7 or older: run `dreamem install claude-code` once**
+  — without it, nothing runs the pass on a computer where only Claude Code is used.
+- A Claude Code session no longer starts with the "Dreaming …: N memory questions wait" line. Ask for the review, or
+  look at `dreamem status`. Codex and Antigravity keep their hooks and the line.
+- `dreamem status` says what starts the pass: `pass starts from: daily task, Codex hooks, Antigravity hooks`, or that
+  nothing does. The review skill reads that line when the last night is old and offers `dreamem install schedule`.
+
 ## 0.7.2 — 2026-11-05
 
 - The plugin manifest holds only what Claude Code reads. The directory's listing fields (documentation, support and

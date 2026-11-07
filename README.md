@@ -16,8 +16,9 @@ It has three parts:
   transcripts, Codex, Antigravity and Gemini CLI sessions, the facts of
   [holographic-memory](https://github.com/itpartypattaya/holographic-memory) or of the reference MCP `memory` server,
   and Claude Code's own memory notes (subagents' too), and writes its questions under `~/.dreaming`. Nothing else.
-- **The summary**: the next session starts with one line — "Dreaming 2026-10-30: 3 memory questions wait…" — counts
-  only, never the text of a fact.
+- **The summary**: in Codex and Antigravity the next session starts with one line — "Dreaming 2026-10-30: 3 memory
+  questions wait…" — counts only, never the text of a fact. Claude Code has no such line since 0.8.0 (see
+  [Limits](#limits)): ask for the review, or look at `dreamem status`.
 - **The review** (`/agent-dreaming:dream` in Claude Code, `$dreaming` in Codex, the skill `dreaming` in Antigravity):
   the agent puts the questions to you one at a time and carries out exactly your answers.
 
@@ -25,10 +26,11 @@ It has three parts:
 
 ![Sequence: a session-start hook runs the pass in the background; the pass reads the store and writes questions; next session a hook shows the count, you start the review, the agent asks, records your answer with dreamem decide, checks the store and makes the one memory call](docs/diagrams/night-and-review.svg)
 
-1. **A session starts.** Two hooks run. The quick one prints the summary line of the last finished night, once a
+1. **A session starts** (Codex, Antigravity). Two hooks run. The quick one prints the summary line of the last finished night, once a
    day (again the same day only when a newer night is there). The background one runs `dreamem run --if-due`: if no
    pass succeeded today and it is past your `dream_time`, the pass runs while you work. Nothing runs while no agent
-   is open; a hook that fails prints nothing and never breaks a session.
+   is open; a hook that fails prints nothing and never breaks a session. In Claude Code a daily task of the
+   computer runs the same `dreamem run --if-due` instead (`dreamem install claude-code` sets it up).
 2. **The pass** takes a lock, reads the last 30 days of your messages, screens them (below), compares them with the
    facts and notes, and publishes the night in one step: `questions.json`, `report.md` and `summary.json`. A pass
    killed half-way leaves the previous night whole.
@@ -137,7 +139,7 @@ claude-mem (observations of tool runs, not facts about you), Zep, Cognee, Letta.
 
 | Agent | Your messages | The review | The session line |
 |---|---|---|---|
-| Claude Code | transcripts | plugin skill `/agent-dreaming:dream` | plugin hook |
+| Claude Code | transcripts | plugin skill `/agent-dreaming:dream` | none since 0.8.0; the pass runs from a daily task (`dreamem install claude-code`) |
 | Codex CLI | rollouts (plain and zstd) | skill `$dreaming` (`dreamem install codex`) | hook in `config.toml` (trust it in `/hooks`) |
 | Antigravity (agy 1.4.3) | `~/.gemini/antigravity*/brain/*/…/transcript.jsonl`: only what is inside `<USER_REQUEST>` | skill `dreaming` in `~/.gemini/config/skills` (`dreamem install antigravity`) | named hooks in `~/.gemini/config/hooks.json`; tonight's pass starts detached |
 | Gemini CLI (0.64) | `~/.gemini/tmp/*/chats/session-*.jsonl`, tool results left out; `~/.gemini/GEMINI.md` (its global memory file) is read as already written | user skills: `~/.gemini/skills/dreaming/SKILL.md` or the shared `~/.agents/skills/dreaming/SKILL.md`; verify discovery with `gemini skills list` | not yet |
@@ -165,15 +167,18 @@ uv tool install git+https://github.com/itpartypattaya/agent-dreaming
 dreamem run --dry-run        # see what it would ask, keep nothing
 ```
 
-**Claude Code** — the plugin brings the review skill and the two session-start hooks; the program above is installed
-apart, the plugin does not bring it. It works where the agent runs commands on your computer (Claude Code in a
-terminal, an IDE or the desktop app), not in the claude.ai chat or Cowork:
+**Claude Code** — the plugin brings the review skill, nothing else; the program above is installed apart, the plugin
+does not bring it. It works where the agent runs commands on your computer (Claude Code in a terminal, an IDE or the
+desktop app), not in the claude.ai chat or Cowork:
 
-```
-/plugin install agent-dreaming --marketplace itpartypattaya/agent-dreaming
+```bash
+dreamem install claude-code
 ```
 
-(`dreamem install claude-code` prints the same commands; `--run` runs them through the `claude` CLI.)
+It prints the two `claude plugin` commands (`--run` runs them through the `claude` CLI) and sets up the daily task that
+runs the nightly pass: Task Scheduler on Windows (it starts as soon as it can after a missed time); on macOS and Linux it
+prints the launchd or systemd files to put in place. `--dry-run` shows all of it and keeps nothing; `--uninstall`
+removes the plugin and the task. Updating from 0.7 or older: run it once, the plugin's hooks are gone.
 
 **Codex CLI** — one marked block in `~/.codex/config.toml` and the skill in `~/.agents/skills/dreaming`
 (`--dry-run` shows the diff, `--uninstall` removes it; then trust the two hooks in `/hooks`):
@@ -228,10 +233,10 @@ dreamem install schedule --dry-run
 | `dreamem failed Q --reason R` | The store refused the call (the fact changed since, not found…). The question comes back with the current text. |
 | `dreamem undo Q` | Cancels a recorded answer (with a `reject` or `not-duplicates`). A memory call already made is undone with `memory_revert` or not at all — the agent says which. |
 | `dreamem list` | Every question of the last night with its status and answer. |
-| `dreamem status` | Where things are: home, clients, timezone, the store, each profile's last night and open questions, coverage, dream time, whether a pass is due. |
+| `dreamem status` | Where things are: home, clients, timezone, the store, each profile's last night and open questions, coverage, dream time, whether a pass is due, and what starts the pass (`pass starts from:` — the daily task, Codex or Antigravity hooks, or nothing). |
 | `dreamem forget-sweep` | After a `memory_forget`: removes the fact from every copy the dream keeps. |
 | `dreamem config time [HH:MM\|any]` | Shows or sets when the pass runs. |
-| `dreamem install claude-code\|codex\|antigravity\|schedule` | Hooks it into a CLI or schedules it. `--dry-run`, `--uninstall`; `--time HH:MM\|any` sets the dream time on the way. |
+| `dreamem install claude-code\|codex\|antigravity\|schedule` | Hooks it into Codex or Antigravity; for Claude Code, the plugin commands and the daily task; `schedule`: the daily task alone. `--dry-run`, `--uninstall`; `--time HH:MM\|any` sets the dream time on the way. |
 | `dreamem hook session-start --client X [--async]` | What the CLIs' hooks call; not for you. |
 
 The question ids look like `Q3-7f2a`: the tag is the night's, so an answer never lands on a question of a newer night.
@@ -300,10 +305,12 @@ Details: [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md).
 
 ## When something does not work
 
-- **The agent says the `dreamem` program is not installed** (the plugin's session-start hook tells it so, and the
-  review stops there): the program is not installed or not on `PATH`. Install it as in [Install](#install); if `uv` says its tool folder is
-  not on `PATH`, run `uv tool update-shell`. Then restart Claude Code: hooks see the `PATH` it started with.
-- **No summary line at the start of a session**: the line comes once a day and only for a finished night.
+- **The agent says the `dreamem` program is not installed** (the review skill finds it missing and stops there): the program is not installed or not on `PATH`. Install it as in [Install](#install); if `uv` says its tool folder is
+  not on `PATH`, run `uv tool update-shell`. Then restart Claude Code: it sees the `PATH` it started with.
+- **No night for days**: `dreamem status` says what starts the pass (`pass starts from:`). "nothing starts the pass
+  on its own" → `dreamem install schedule` (or `dreamem install claude-code`).
+- **No summary line at the start of a session** (Codex, Antigravity; Claude Code has none since 0.8.0): the line
+  comes once a day and only for a finished night.
   `dreamem status` tells whether a pass is due, when it runs (`dream_time`) and how the last night went;
   `dreamem run` makes one now.
 - **The agent stops: this session talks to another store**: the question is about a per-project store. Answer it in
@@ -313,7 +320,9 @@ Details: [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md).
 - **A warning about an unknown timezone**: the pass then counts days in UTC. Set `timezone` in the settings, or
   reinstall with `uv tool install --reinstall git+https://github.com/itpartypattaya/agent-dreaming`, which brings
   the zone database (`tzdata`) on Windows.
-- **To remove it all**: `/plugin uninstall agent-dreaming`, `uv tool uninstall agent-dreaming`, and the folder
+- **To remove it all**: `dreamem install claude-code --uninstall` (the plugin and the daily task), `dreamem install
+  codex --uninstall` and `dreamem install antigravity --uninstall` where you installed them, `uv tool uninstall
+  agent-dreaming`, and the folder
   `~/.dreaming` (its questions and answers; your memory is not in it).
 
 Anything else: [open an issue](https://github.com/itpartypattaya/agent-dreaming/issues) with what you ran and what it
@@ -335,9 +344,11 @@ paste it.
 - holographic-memory before 0.10.0 does not take `origin` on a change or a correction: the agent then makes the same
   call without it, and the new text is kept as an agent's (a change) or with the fact's old origin (a correction).
 - Possible new facts come from the last 30 days only, and the filter is tuned for Russian and English.
-- The plugin's hooks are one line for bash (macOS, Linux, Git Bash on Windows) and PowerShell 7. Claude Code on
-  Windows without Git Bash and without PowerShell 7 runs them in Windows PowerShell 5.1, which cannot read that line:
-  there the session starts with a hook error. Git for Windows or PowerShell 7 fixes it.
+- The Claude Code plugin has no hooks since 0.8.0: the Anthropic plugin directory refuses hooks of any type from
+  organizations that are not Verified (since November 2026), and asking for that status is not possible yet. So a
+  Claude Code session does not start with the summary line, and the pass runs from a daily task of the computer
+  instead of the first session after `dream_time`; when the computer is off at that time, the task runs once it is on
+  again (Windows, systemd) or at the next time (launchd).
 
 ## Licence
 

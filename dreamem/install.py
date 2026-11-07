@@ -1,8 +1,9 @@
 """``dreamem install claude-code | codex | schedule [--dry-run] [--uninstall]``.
 
-Claude Code: the plugin is the one way in (``/agent-dreaming:dream`` and its two hooks come with it); this command
-prints — or runs, with ``--run`` — the two ``claude plugin`` commands. Nothing is written into settings by hand, so the
-hooks cannot be registered twice.
+Claude Code: the plugin brings the review skill ``/agent-dreaming:dream`` and nothing else — since 0.8.0 no hooks:
+the Anthropic directory refuses hooks of any type from organizations that are not Verified. This command prints — or
+runs, with ``--run`` — the two ``claude plugin`` commands, then sets up the daily task below, which now runs the pass
+for Claude Code (``--uninstall`` removes both). Nothing is written into Claude Code's settings.
 
 Codex CLI: one marked block at the end of ``~/.codex/config.toml`` with the two SessionStart hooks, and the skill
 ``dreaming`` in ``~/.agents/skills/dreaming/`` (``$dreaming``). A file is backed up next to itself before it changes,
@@ -315,7 +316,8 @@ def install_antigravity(homes: Homes, *, remove: bool, dry_run: bool, out=sys.st
     return 0
 
 
-def install_claude(*, remove: bool, dry_run: bool, run_it: bool, out=sys.stdout) -> int:
+def install_claude(homes: Homes, *, remove: bool, dry_run: bool, run_it: bool, out=sys.stdout,
+                   prompt=_interactive) -> int:
     cmds = ([["claude", "plugin", "uninstall", PLUGIN]] if remove else
             [["claude", "plugin", "marketplace", "add", MARKETPLACE], ["claude", "plugin", "install", PLUGIN]])
     cli = shutil.which("claude")
@@ -330,9 +332,42 @@ def install_claude(*, remove: bool, dry_run: bool, run_it: bool, out=sys.stdout)
             print((result.stderr or result.stdout).strip()[-500:], file=out)
             return 1
     if not remove:
-        print("The plugin calls `dreamem` from PATH: install it with `uv tool install "
-              "git+https://github.com/itpartypattaya/agent-dreaming`.", file=out)
-    return 0
+        print("The plugin has no session hooks (the directory takes none), so a daily task runs the nightly pass:",
+              file=out)
+        if not dry_run:
+            ask_time(homes, prompt, out)
+    return install_schedule(homes, remove=remove, dry_run=dry_run, out=out)
+
+
+def scheduled(homes: Homes) -> bool:
+    """Is the daily task in place? Windows: Task Scheduler knows it; macOS and Linux: its file is where the printed
+    instructions put it (this program does not enable it there, so the file is all it can see)."""
+    try:
+        if sys.platform == "win32":
+            return subprocess.run(["schtasks", "/Query", "/TN", TASK], capture_output=True, timeout=30).returncode == 0
+        if sys.platform == "darwin":
+            return (Path.home() / "Library" / "LaunchAgents" / "com.agent-dreaming.plist").is_file()
+        return (Path.home() / ".config" / "systemd" / "user" / "agent-dreaming.timer").is_file()
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def pass_starters(homes: Homes) -> list[str]:
+    """What starts the nightly pass on this computer: the daily task, Codex's hooks, Antigravity's hooks."""
+    found = ["daily task"] if scheduled(homes) else []
+    codex = homes.codex / "config.toml"
+    try:
+        if codex.is_file() and _our_hooks(codex.read_text(encoding="utf-8")):
+            found.append("Codex hooks")
+    except (OSError, UnicodeDecodeError):
+        pass
+    try:
+        hooks = json.loads((homes.gemini / "config" / "hooks.json").read_text(encoding="utf-8"))
+        if isinstance(hooks, dict) and any(ours(hooks.get(name)) for name in AG_HOOKS):
+            found.append("Antigravity hooks")
+    except (OSError, ValueError):
+        pass
+    return found
 
 
 def schedule_spec(platform: str | None = None, at: str = "04:00") -> tuple[str, str]:
