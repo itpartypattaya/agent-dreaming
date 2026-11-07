@@ -2,7 +2,7 @@
 
 Claude Code: the plugin brings the review skill ``/agent-dreaming:dream`` and nothing else — since 0.8.0 no hooks:
 the Anthropic directory refuses hooks of any type from organizations that are not Verified. This command prints — or
-runs, with ``--run`` — the two ``claude plugin`` commands, then sets up the daily task below, which now runs the pass
+runs, with ``--run`` — the ``claude plugin`` commands that install the plugin or bring it up to date, then sets up the daily task below, which now runs the pass
 for Claude Code (``--uninstall`` removes both). Nothing is written into Claude Code's settings.
 
 Codex CLI: one marked block at the end of ``~/.codex/config.toml`` with the two SessionStart hooks, and the skill
@@ -40,7 +40,8 @@ from .paths import Homes
 MARK_BEGIN = "# >>> agent-dreaming (dreamem install codex) >>>"
 MARK_END = "# <<< agent-dreaming <<<"
 MARKETPLACE = "itpartypattaya/agent-dreaming"
-PLUGIN = "agent-dreaming@agent-dreaming"
+MARKETPLACE_NAME = "agent-dreaming"  # the name in .claude-plugin/marketplace.json
+PLUGIN = f"agent-dreaming@{MARKETPLACE_NAME}"
 TASK = "agent-dreaming"
 SKILL_MARK = "dreamem decide"  # in our skill's text, in no other skill's: what install may replace or remove
 
@@ -318,8 +319,12 @@ def install_antigravity(homes: Homes, *, remove: bool, dry_run: bool, out=sys.st
 
 def install_claude(homes: Homes, *, remove: bool, dry_run: bool, run_it: bool, out=sys.stdout,
                    prompt=_interactive) -> int:
+    # `install` on a plugin already there does nothing, so an installed plugin is brought up to date by `update`; both
+    # answer 0 when there is nothing to do (checked on Claude Code 2.1.x).
     cmds = ([["claude", "plugin", "uninstall", PLUGIN]] if remove else
-            [["claude", "plugin", "marketplace", "add", MARKETPLACE], ["claude", "plugin", "install", PLUGIN]])
+            [["claude", "plugin", "marketplace", "add", MARKETPLACE],
+             ["claude", "plugin", "marketplace", "update", MARKETPLACE_NAME],
+             ["claude", "plugin", "install", PLUGIN], ["claude", "plugin", "update", PLUGIN]])
     cli = shutil.which("claude")
     for cmd in cmds:
         shown = " ".join(cmd)

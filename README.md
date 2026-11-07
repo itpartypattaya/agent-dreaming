@@ -175,9 +175,9 @@ desktop app), not in the claude.ai chat or Cowork:
 dreamem install claude-code
 ```
 
-It prints the two `claude plugin` commands (`--run` runs them through the `claude` CLI) and sets up the daily task that
-runs the nightly pass: Task Scheduler on Windows (it starts as soon as it can after a missed time); on macOS and Linux it
-prints the launchd or systemd files to put in place. `--dry-run` shows all of it and keeps nothing; `--uninstall`
+It prints the `claude plugin` commands that install the plugin or bring it up to date (`--run` runs them through the
+`claude` CLI) and sets up the daily task that runs the nightly pass: Task Scheduler on Windows (it starts as soon as it
+can after a missed time); on macOS and Linux it prints the launchd or systemd files to put in place. `--dry-run` shows all of it and keeps nothing; `--uninstall`
 removes the plugin and the task. Updating from 0.7 or older: run it once, the plugin's hooks are gone.
 
 **Codex CLI** — one marked block in `~/.codex/config.toml` and the skill in `~/.agents/skills/dreaming`
