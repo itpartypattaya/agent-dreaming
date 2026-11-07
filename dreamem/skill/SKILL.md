@@ -114,7 +114,7 @@ they ask you to.
 
 The plugin has no session hooks (the Anthropic directory takes none), so in Claude Code the nightly pass runs from a
 daily task of the computer, or from Codex's or Antigravity's hooks. If `dreamem show` finds no night, or the last night
-is days old, run `dreamem status` and read its line `pass starts from:`. When it says nothing starts the pass, tell
+is days old, run `dreamem status` and read its line `nightly run:`. When it says nothing starts it, tell
 the person in one or two lines: no pass runs by itself on this computer, and `dreamem install schedule` sets up the
 daily task (Windows: Task Scheduler; on macOS and Linux it prints the files to put in place). Run it only if they say
 yes. A pass now is `dreamem run` (seconds), then `dreamem show`.

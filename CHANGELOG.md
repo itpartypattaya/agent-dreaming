@@ -11,7 +11,7 @@
   — without it, nothing runs the pass on a computer where only Claude Code is used.
 - A Claude Code session no longer starts with the "Dreaming …: N memory questions wait" line. Ask for the review, or
   look at `dreamem status`. Codex and Antigravity keep their hooks and the line.
-- `dreamem status` says what starts the pass: `pass starts from: daily task, Codex hooks, Antigravity hooks`, or that
+- `dreamem status` says what starts the pass: `nightly run: daily task, Codex hooks, Antigravity hooks`, or that
   nothing does. The review skill reads that line when the last night is old and offers `dreamem install schedule`.
 
 ## 0.7.2 — 2026-11-05

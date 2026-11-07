@@ -75,7 +75,7 @@ def test_status_says_when_nothing_starts_the_pass(world, monkeypatch):
     monkeypatch.setattr(install, "scheduled", lambda homes: False)
     out = io.StringIO()
     run.status(world.homes, out=out)
-    assert "pass starts from: nothing starts the pass on its own — run `dreamem install schedule`" in out.getvalue()
+    assert "nightly run: nothing starts it on its own — run `dreamem install schedule`" in out.getvalue()
 
 
 def test_status_names_each_thing_that_starts_the_pass(world, monkeypatch):
@@ -85,7 +85,7 @@ def test_status_names_each_thing_that_starts_the_pass(world, monkeypatch):
                                  prompt=lambda q: "") == 0
     out = io.StringIO()
     run.status(world.homes, out=out)
-    assert "pass starts from: daily task, Codex hooks" in out.getvalue()
+    assert "nightly run: daily task, Codex hooks" in out.getvalue()
 
 
 @pytest.mark.parametrize("copy", ["dreamem/skill/SKILL.md", "claude-plugin/skills/dream/SKILL.md"])
@@ -94,6 +94,6 @@ def test_the_skill_says_how_the_pass_starts_without_hooks(copy):
     missing = text.split("## When `dreamem` is missing", 1)[1].split("\n## ", 1)[0]
     assert "dreamem install claude-code" in missing
     section = text.split("## When no pass runs on its own", 1)[1].split("\n## ", 1)[0]
-    assert "nothing starts the pass" in section
+    assert "`nightly run:`" in section and "nothing starts it" in section
     assert "dreamem install schedule" in section
     assert "only if" in section.lower() or "on their yes" in section.lower()

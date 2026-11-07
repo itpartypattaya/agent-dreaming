@@ -432,8 +432,8 @@ def status(homes: Homes, out=sys.stdout) -> int:
     from . import install  # here: install is only needed for this line
 
     starters = install.pass_starters(homes)
-    print("pass starts from: " + (", ".join(starters) if starters else
-                                  "nothing starts the pass on its own — run `dreamem install schedule`"), file=out)
+    print("nightly run: " + (", ".join(starters) if starters else
+                                  "nothing starts it on its own — run `dreamem install schedule`"), file=out)
     for w in warnings:
         print(f"warning: {w}", file=out)
     return 0

@@ -233,7 +233,7 @@ dreamem install schedule --dry-run
 | `dreamem failed Q --reason R` | The store refused the call (the fact changed since, not found…). The question comes back with the current text. |
 | `dreamem undo Q` | Cancels a recorded answer (with a `reject` or `not-duplicates`). A memory call already made is undone with `memory_revert` or not at all — the agent says which. |
 | `dreamem list` | Every question of the last night with its status and answer. |
-| `dreamem status` | Where things are: home, clients, timezone, the store, each profile's last night and open questions, coverage, dream time, whether a pass is due, and what starts the pass (`pass starts from:` — the daily task, Codex or Antigravity hooks, or nothing). |
+| `dreamem status` | Where things are: home, clients, timezone, the store, each profile's last night and open questions, coverage, dream time, whether a pass is due, and what starts the pass (`nightly run:` — the daily task, Codex or Antigravity hooks, or nothing). |
 | `dreamem forget-sweep` | After a `memory_forget`: removes the fact from every copy the dream keeps. |
 | `dreamem config time [HH:MM\|any]` | Shows or sets when the pass runs. |
 | `dreamem install claude-code\|codex\|antigravity\|schedule` | Hooks it into Codex or Antigravity; for Claude Code, the plugin commands and the daily task; `schedule`: the daily task alone. `--dry-run`, `--uninstall`; `--time HH:MM\|any` sets the dream time on the way. |
@@ -307,8 +307,8 @@ Details: [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md).
 
 - **The agent says the `dreamem` program is not installed** (the review skill finds it missing and stops there): the program is not installed or not on `PATH`. Install it as in [Install](#install); if `uv` says its tool folder is
   not on `PATH`, run `uv tool update-shell`. Then restart Claude Code: it sees the `PATH` it started with.
-- **No night for days**: `dreamem status` says what starts the pass (`pass starts from:`). "nothing starts the pass
-  on its own" → `dreamem install schedule` (or `dreamem install claude-code`).
+- **No night for days**: `dreamem status` says what starts the pass (`nightly run:`). "nothing starts it on its
+  own" → `dreamem install schedule` (or `dreamem install claude-code`).
 - **No summary line at the start of a session** (Codex, Antigravity; Claude Code has none since 0.8.0): the line
   comes once a day and only for a finished night.
   `dreamem status` tells whether a pass is due, when it runs (`dream_time`) and how the last night went;
