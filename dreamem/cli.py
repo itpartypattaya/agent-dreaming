@@ -137,7 +137,7 @@ def main(argv=None) -> int:
             return install.install_codex(h, remove=args.uninstall, dry_run=args.dry_run, out=sys.stdout)
         if args.target == "claude-code":
             return install.install_claude(h, remove=args.uninstall, dry_run=args.dry_run, run_it=args.run_it,
-                                          out=sys.stdout)
+                                          out=sys.stdout, at=at)
         return install.install_schedule(h, remove=args.uninstall, dry_run=args.dry_run, at=at, out=sys.stdout)
     return 2
 

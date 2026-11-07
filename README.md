@@ -178,7 +178,8 @@ dreamem install claude-code
 It prints the `claude plugin` commands that install the plugin or bring it up to date (`--run` runs them through the
 `claude` CLI) and sets up the daily task that runs the nightly pass: Task Scheduler on Windows (it starts as soon as it
 can after a missed time); on macOS and Linux it prints the launchd or systemd files to put in place. `--dry-run` shows all of it and keeps nothing; `--uninstall`
-removes the plugin and the task. Updating from 0.7 or older: run it once, the plugin's hooks are gone.
+removes the task (on macOS and Linux it says how) and prints the plugin's removal, which `--run` runs. Updating from
+0.7 or older: run it once, the plugin's hooks are gone.
 
 **Codex CLI** — one marked block in `~/.codex/config.toml` and the skill in `~/.agents/skills/dreaming`
 (`--dry-run` shows the diff, `--uninstall` removes it; then trust the two hooks in `/hooks`):
@@ -320,7 +321,7 @@ Details: [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md).
 - **A warning about an unknown timezone**: the pass then counts days in UTC. Set `timezone` in the settings, or
   reinstall with `uv tool install --reinstall git+https://github.com/itpartypattaya/agent-dreaming`, which brings
   the zone database (`tzdata`) on Windows.
-- **To remove it all**: `dreamem install claude-code --uninstall` (the plugin and the daily task), `dreamem install
+- **To remove it all**: `dreamem install claude-code --uninstall --run` (the plugin and the daily task), `dreamem install
   codex --uninstall` and `dreamem install antigravity --uninstall` where you installed them, `uv tool uninstall
   agent-dreaming`, and the folder
   `~/.dreaming` (its questions and answers; your memory is not in it).
@@ -349,6 +350,9 @@ paste it.
   Claude Code session does not start with the summary line, and the pass runs from a daily task of the computer
   instead of the first session after `dream_time`; when the computer is off at that time, the task runs once it is on
   again (Windows, systemd) or at the next time (launchd).
+- The daily task runs with your user account's settings, not with variables set only in the terminal you installed
+  from: with `DREAMEM_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HOLOMEM_HOME` or `DREAMEM_GEMINI_DIR` set there, the
+  install warns, and the task reads the usual folders unless those variables are set for your account.
 
 ## Licence
 

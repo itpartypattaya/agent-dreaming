@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.2 — 2026-11-07
+
+Fixes from a Codex review of 0.8.0–0.8.1; the daily task now runs the pass for Claude Code, so each could leave a
+person without a night:
+
+- An `&` in the path of the Python that runs the program broke the task's XML (and the macOS plist): no task was made.
+  The path is escaped now.
+- `dreamem status` counted a Codex or Antigravity summary hook as starting the pass, and a task switched off in Task
+  Scheduler as running it. Now only the hook that runs the pass counts, and a disabled task does not.
+- `dreamem install claude-code --dry-run --time 23:15` showed the task at the old time; it shows the time given.
+- On macOS and Linux, `--uninstall` printed the files to install the task; it now says how to stop and remove it.
+- The install warns when `DREAMEM_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HOLOMEM_HOME` or `DREAMEM_GEMINI_DIR` is
+  set in the terminal only: the task does not carry them.
+- README: `--uninstall` removes the task and prints the plugin's removal; `--run` runs it.
+
 ## 0.8.1 — 2026-11-07
 
 - `dreamem install claude-code --run` brings a plugin that is already installed up to date. `claude plugin install`
