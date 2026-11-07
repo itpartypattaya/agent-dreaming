@@ -429,6 +429,11 @@ def status(homes: Homes, out=sys.stdout) -> int:
         print(f"memory notes: {where} — {'a format not read yet' if kind == 'unknown-format' else kind}; "
               "coverage partial", file=out)
     print(f"last success: {summary.get('last_success', 'never')}; due now: {due(homes)}", file=out)
+    from . import install  # here: install is only needed for this line
+
+    starters = install.pass_starters(homes)
+    print("nightly run: " + (", ".join(starters) if starters else
+                                  "nothing starts it on its own — run `dreamem install schedule`"), file=out)
     for w in warnings:
         print(f"warning: {w}", file=out)
     return 0
