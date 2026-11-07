@@ -10,8 +10,8 @@ Codex CLI: one marked block at the end of ``~/.codex/config.toml`` with the two 
 the new TOML must parse, ``--dry-run`` shows the diff and writes nothing, ``--uninstall`` removes exactly what was
 added. Codex runs a hook only once it is trusted: open ``/hooks`` in Codex and trust the two.
 
-Both ask for the time of the pass when none is chosen: ``install codex`` in a terminal, the plugin through the agent
-in the first session (the SessionStart hook asks it to).
+Both ask for the time of the pass when none is chosen, in a terminal (``install codex``, ``install claude-code``);
+Codex's hook also asks the agent to ask in the first session.
 
 Antigravity: the skill ``dreaming`` in ``~/.gemini/config/skills/dreaming/`` and two named SessionStart hooks in
 ``~/.gemini/config/hooks.json`` (the global customization root of agy 1.4.3): one tells the agent how many questions
@@ -46,6 +46,7 @@ MARKETPLACE_NAME = "agent-dreaming"  # the name in .claude-plugin/marketplace.js
 PLUGIN = f"agent-dreaming@{MARKETPLACE_NAME}"
 TASK = "agent-dreaming"
 # Where the program finds its folders (paths.homes); a task the system starts sees only the user's own settings.
+NOTHING_RUNS = "nightly run: nothing starts it on its own — run `dreamem install schedule`"
 FOLDER_VARIABLES = ("DREAMEM_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "HOLOMEM_HOME", "DREAMEM_GEMINI_DIR")
 SKILL_MARK = "dreamem decide"  # in our skill's text, in no other skill's: what install may replace or remove
 
@@ -202,7 +203,7 @@ def _terminal() -> bool:
 
 def _interactive(question: str) -> str:
     if not _terminal():
-        raise EOFError  # not a terminal: the agent asks in the first session instead
+        raise EOFError  # not a terminal: the time stays unchosen (the task runs at 04:00, Codex's hook asks)
     return input(question)
 
 
@@ -335,7 +336,11 @@ def install_claude(homes: Homes, *, remove: bool, dry_run: bool, run_it: bool, o
         if dry_run or not run_it or not cli:
             print(("run: " if cli else "run (claude not on PATH here): ") + shown, file=out)
             continue
-        result = subprocess.run([cli, *cmd[1:]], capture_output=True, text=True, timeout=120)
+        try:
+            result = subprocess.run([cli, *cmd[1:]], capture_output=True, text=True, timeout=120)
+        except subprocess.TimeoutExpired:  # `marketplace add` clones a repository: a slow network can take long
+            print(f"failed: {shown} (it did not answer in 120 s; run it again)", file=out)
+            return 1
         print(f"{'ran' if result.returncode == 0 else 'failed'}: {shown}", file=out)
         if result.returncode != 0:
             print((result.stderr or result.stdout).strip()[-500:], file=out)
@@ -359,9 +364,10 @@ def scheduled(homes: Homes) -> bool:
             # A task switched off in Task Scheduler is still there but runs nothing: its <Settings> say so.
             settings = re.search(rb"<Settings>.*?</Settings>", found.stdout or b"", re.S)
             return not (settings and re.search(rb"<Enabled>\s*false\s*</Enabled>", settings.group(0)))
-        if sys.platform == "darwin":
-            return (Path.home() / "Library" / "LaunchAgents" / "com.agent-dreaming.plist").is_file()
-        return (Path.home() / ".config" / "systemd" / "user" / "agent-dreaming.timer").is_file()
+        # The printed files may be in place but never loaded: ask the service manager, not the folder.
+        cmd = (["launchctl", "list", "com.agent-dreaming"] if sys.platform == "darwin" else
+               ["systemctl", "--user", "is-active", "--quiet", "agent-dreaming.timer"])
+        return subprocess.run(cmd, capture_output=True, timeout=30).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 
@@ -415,7 +421,9 @@ def schedule_spec(platform: str | None = None, at: str = "04:00") -> tuple[str, 
     platform = platform or sys.platform
     hour, minute = config.dream_time(at) or (4, 0)
     if platform == "win32":
-        python = escape(str(Path(sys.executable)))  # an `&` in the path would break the XML (Codex review of 0.8)
+        python = Path(sys.executable)
+        windowless = python.with_name("pythonw.exe")  # no console window at night (Fable review of 0.8)
+        python = escape(str(windowless if windowless.is_file() else python))  # `&` broke the XML (Codex review)
         return (f"{TASK}.xml", f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>agent-dreaming: the nightly memory review (read-only)</Description></RegistrationInfo>
@@ -479,6 +487,9 @@ def install_schedule(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdou
               "agent-dreaming.timer); this command writes them only on Windows.", file=out)
         return 0
     if remove:
+        if subprocess.run(["schtasks", "/Query", "/TN", TASK], capture_output=True, timeout=30).returncode != 0:
+            print("no daily task to remove", file=out)
+            return 0
         cmd = ["schtasks", "/Delete", "/TN", TASK, "/F"]
     else:
         xml = homes.dreaming / name
@@ -491,7 +502,18 @@ def install_schedule(homes: Homes, *, remove: bool, dry_run: bool, out=sys.stdou
         if not remove:
             print(content, file=out)
         return 0
+    code, text = _scheduler(cmd)
+    print(text.strip(), file=out)
+    return 0 if code == 0 else 1
+
+
+def _scheduler(cmd: list[str]) -> tuple[int, str]:
+    """Run a Task Scheduler command; its answer is in the console's OEM code page even through a pipe (an agent's
+    shell), where the console's own encoding is unknown."""
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60,
-                            encoding=os.device_encoding(1) or "utf-8", errors="replace")
-    print((result.stdout or result.stderr).strip(), file=out)
-    return 0 if result.returncode == 0 else 1
+                            encoding="oem" if sys.platform == "win32" else "utf-8", errors="replace")
+    return result.returncode, (result.stdout or result.stderr or "")
+
+
+def scheduler_text(cmd: list[str]) -> str:
+    return _scheduler(cmd)[1]

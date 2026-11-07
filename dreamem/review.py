@@ -141,6 +141,10 @@ def show(homes: Homes, *, profile: str | None = None, as_json: bool = False, inc
         if as_json:
             out(json.dumps(payload, ensure_ascii=False, indent=1))
             return 0
+        from . import install  # here: only this line needs it
+
+        if not install.pass_starters(homes):  # after the plugin lost its hooks (0.8), say so where a review starts
+            out(install.NOTHING_RUNS)
         if not shown_any:
             out("No open memory questions.")
             return 0

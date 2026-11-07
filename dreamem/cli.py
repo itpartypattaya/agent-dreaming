@@ -16,7 +16,7 @@ def _utf8() -> None:
             pass
 
 
-def set_time(h, value: str | None) -> int:
+def set_time(h, value: str | None, *, installing: bool = False) -> int:
     if value is None:
         chosen = config.load(h)[0].get("dream_time")
         print(f"dream time: {chosen or 'not chosen'}"
@@ -27,9 +27,9 @@ def set_time(h, value: str | None) -> int:
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
-    print(f"dream time: {kept}" + (" — the first session of each day" if kept == config.ANY_TIME else
-                                   " — the first session after it runs the pass"))
-    print("If you installed the schedule, run `dreamem install schedule` again to move it to this time.")
+    print(f"dream time: {kept}" + (" — the first session of each day" if kept == config.ANY_TIME else ""))
+    if not installing:  # an install sets the task up itself, at this time
+        print("The daily task keeps the time it was made with: run `dreamem install schedule` again to move it.")
     return 0
 
 
@@ -129,7 +129,7 @@ def main(argv=None) -> int:
                 return 2
             if args.dry_run:
                 print(f"would set dream time: {at}")  # a preview keeps nothing, the time included
-            elif set_time(h, at):
+            elif set_time(h, at, installing=True):
                 return 2
         if args.target == "antigravity":
             return install.install_antigravity(h, remove=args.uninstall, dry_run=args.dry_run, out=sys.stdout)
