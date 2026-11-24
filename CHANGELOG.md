@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.5 — 2026-11-24
+
+- Example texts renamed: a few test facts, a README example and a comment of the screen use other invented
+  names, places and hosts; each test checks what it checked before. No change to what dreamem does.
+
 ## 0.8.4 — 2026-11-07
 
 Fewer and truer questions (Anton: confirmed facts came back every few days, and "conflicts" appeared where there were

@@ -50,7 +50,7 @@ What you say in a Claude Code session, and what follows:
 
 | You say | What happens |
 |---|---|
-| `/agent-dreaming:dream`, or just "dream" / "разбери сон" | The agent runs `dreamem show` and asks last night's first question; you answer in your words ("yes, merge them", "she moved to Chiang Mai in May", "not now"), it records the answer and makes the one memory call it prints. |
+| `/agent-dreaming:dream`, or just "dream" / "разбери сон" | The agent runs `dreamem show` and asks last night's first question; you answer in your words ("yes, merge them", "she moved to Lisbon in May", "not now"), it records the answer and makes the one memory call it prints. |
 | "run dreaming now" / "сделай проход сейчас" | No night yet, or you want a fresh one: the agent runs `dreamem run` (seconds), then starts the review. |
 | "dream at 23:00" / "проход в 23:00" | The agent sets the time with `dreamem config time 23:00`: the first session after 23:00 runs the pass. |
 | `dreamem run --dry-run` (in a terminal) | Prints what tonight's pass would ask, keeps nothing: a safe first look. |

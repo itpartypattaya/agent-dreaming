@@ -108,12 +108,12 @@ def test_a_windows_file_of_rules_loses_only_its_secret_paragraph():
 RULES = "\n\n".join([
     "# Rules for the agent",
     "Сервер для тяжёлых задач трогать только с оглядкой на нагрузку, версия клиента 2.1.314.",
-    "Диск ноутбука 476 GB, свободно около 90 GB на начало сентября.",
+    "Диск ноутбука 512 GB, свободно около 90 GB на начало сентября.",
     "Память агентов ведётся в holographic, база заведена в 2026 году.",
     "Папка загрузок заполнена черновиками, их 12 штук — чистить раз в 7 дней.",
-    "hr-ovh — общий бокс с Мией, дашборд на порту 9119.",
+    "app-box — общий бокс с ботом, дашборд на порту 8080.",
 ])
-SERVER = "Сервер hr-ovh: диск заполнен на 83 процента, памяти 8 GB"
+SERVER = "Сервер app-box: диск заполнен на 64 процента, памяти 8 GB"
 
 
 def memory_text(*docs):
@@ -133,14 +133,14 @@ def test_a_long_document_is_no_conflict_by_words_scattered_over_it():
 def test_a_paragraph_about_the_same_thing_with_other_numbers_is_still_a_conflict():
     from dreamem.engine import dream
 
-    doc = RULES + "\n\nСервер hr-ovh: диск заполнен на 70 процентов, памяти 8 GB, следить еженедельно."
+    doc = RULES + "\n\nСервер app-box: диск заполнен на 70 процентов, памяти 8 GB, следить еженедельно."
     hits = dream.find_conflicts(SERVER, memory_text(doc))
     assert len(hits) == 1 and "70" in hits[0]["memory_numbers"]
 
 
 def test_a_fact_is_not_already_in_memory_by_words_scattered_over_a_document():
-    # The same whole-document comparison hid 12 of Anton's facts as "already in memory" (e.g. "Anton's cat is Mia"
-    # against a whole AGENTS.md): they were never offered.
+    # The same whole-document comparison hid 12 of Anton's facts as "already in memory" (e.g. "The cat is called
+    # Pepper" against a whole AGENTS.md): they were never offered.
     from dreamem.engine import dream
 
     assert not dream.already_in_memory(SERVER, memory_text(RULES))
@@ -155,9 +155,9 @@ def test_a_fact_a_paragraph_already_says_is_still_in_memory():
 def test_a_list_item_is_its_own_unit():
     from dreamem.engine import dream
 
-    doc = "Сайты:\n- obmen.itparty.club — курс и калькулятор\n- " + SERVER + "\n- mafia.itparty.club — прод"
+    doc = "Сайты:\n- rates.example.org — курс и калькулятор\n- " + SERVER + "\n- game.example.org — прод"
     assert dream.already_in_memory(SERVER, memory_text(RULES + "\n\n" + doc))
-    assert dream.find_conflicts(SERVER.replace("83", "70"), memory_text(doc))
+    assert dream.find_conflicts(SERVER.replace("64", "70"), memory_text(doc))
 
 
 def conflicting(world, *, confirmed_days_ago=None):
@@ -173,7 +173,7 @@ def test_a_fact_confirmed_lately_is_not_a_conflict_with_a_file_of_rules(world):
     # with it is not a new question for them.
     fid = conflicting(world, confirmed_days_ago=1)
     (world.homes.claude / "CLAUDE.md").write_text(
-        RULES + "\n\nСервер hr-ovh: диск заполнен на 70 процентов, памяти 8 GB, следить еженедельно.\n",
+        RULES + "\n\nСервер app-box: диск заполнен на 70 процентов, памяти 8 GB, следить еженедельно.\n",
         encoding="utf-8")
     assert asked(night(world), fid, ("conflict",)) == []
 
@@ -181,7 +181,7 @@ def test_a_fact_confirmed_lately_is_not_a_conflict_with_a_file_of_rules(world):
 def test_without_a_confirmation_the_same_file_of_rules_is_a_conflict(world):
     fid = conflicting(world)
     (world.homes.claude / "CLAUDE.md").write_text(
-        RULES + "\n\nСервер hr-ovh: диск заполнен на 70 процентов, памяти 8 GB, следить еженедельно.\n",
+        RULES + "\n\nСервер app-box: диск заполнен на 70 процентов, памяти 8 GB, следить еженедельно.\n",
         encoding="utf-8")
     assert asked(night(world), fid, ("conflict",)) == ["conflict"]
 
@@ -189,7 +189,7 @@ def test_without_a_confirmation_the_same_file_of_rules_is_a_conflict(world):
 def test_a_claude_note_disagreeing_with_a_confirmed_fact_is_still_asked_about(world):
     # The note may be the stale side, and the review can fix a note (note-changed / note-outdated).
     fid = conflicting(world, confirmed_days_ago=1)
-    world.note("server", "сервер hr-ovh", "Сервер hr-ovh: диск заполнен на 70 процентов, памяти 8 GB.")
+    world.note("server", "сервер app-box", "Сервер app-box: диск заполнен на 70 процентов, памяти 8 GB.")
     assert asked(night(world), fid, ("conflict",)) == ["conflict"]
 
 
