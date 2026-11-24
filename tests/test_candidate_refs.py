@@ -15,11 +15,11 @@ from world import days_ago
 from dreamem import candidates
 from dreamem.sources import claude_code, codex
 
-TEXT = "У меня дочка Ева, ей семь лет, и у неё аллергия на арахис"
+TEXT = "У меня дочка Яна, ей шесть лет, и у неё аллергия на арахис"
 
 
 def claude_message(world):
-    world.claude_file([world.claude_line(TEXT, ts=days_ago(2), uid="u-eva")], session="talk")
+    world.claude_file([world.claude_line(TEXT, ts=days_ago(2), uid="u-yana")], session="talk")
     msgs, _ = claude_code.read(world.homes.claude_projects, time.time() - 30 * 86400)
     return next(m for m in msgs if m.text == TEXT)
 
@@ -35,7 +35,7 @@ def test_a_reference_holds_no_word(world):
     for m in (claude_message(world), codex_message(world)[0]):
         ref = candidates.reference(key, m)
         raw = json.dumps(ref, ensure_ascii=False) + json.dumps(ref)
-        for piece in (TEXT, TEXT[:20], "дочка Ева", "арахис", "Ева", TEXT.lower()):
+        for piece in (TEXT, TEXT[:20], "дочка Яна", "арахис", "Яна", TEXT.lower()):
             assert piece not in raw and piece.encode("unicode_escape").decode() not in raw
         assert set(ref) == {"client", "source", "ts", "id", "text"}
 
@@ -51,7 +51,7 @@ def test_a_line_rewritten_since_is_gone(world):
     key = candidates.salt(world.homes)
     ref = candidates.reference(key, claude_message(world))
     path = world.homes.claude_projects / ref["source"]
-    path.write_bytes(path.read_bytes().replace("семь".encode(), "восемь".encode()))  # same uuid, other words
+    path.write_bytes(path.read_bytes().replace("шесть".encode(), "восемь".encode()))  # same uuid, other words
     assert candidates.resolve(world.homes, key, ref) is None
 
 
