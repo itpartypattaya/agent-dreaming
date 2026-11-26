@@ -21,8 +21,9 @@ carry out exactly their answers, then tell them in a few lines what was done.
    file); a line counts from a session only when the person said it, not an agent. Your own answer always goes with
    `--verified "<what you checked, a few plain words>"` — name the source, never quote a fact's text there, and
    never record your answer as theirs. `dreamem` refuses what only the person may answer (forget, reject, no, wrong,
-   a promotion, a confirmation, ending or rewriting a fact that is not an agent's own `inferred` one, a delete a
-   store cannot give back, a duplicate that is not the same text): ask them. Never infer "yes" from silence, never
+   a promotion, a confirmation, a rewrite or delete a store cannot give back, a merge that would drop what only
+   the second fact says): ask them. A technical fact is yours to correct whoever stored it — the person's own
+   words too — when the check gave a clear answer; a personal one never is. Never infer "yes" from silence, never
    carry one answer over to another question. "Not now" is a fine answer (`later`).
 3. **One question at a time** to the person, in their language, with the texts exactly as shown (never shorten a
    text of a "merge?" question: the person decides on the two whole texts). Up to 7 a session; the rest wait for
@@ -39,10 +40,12 @@ carry out exactly their answers, then tell them in a few lines what was done.
    days: see "When no pass runs on its own" below.
 2. First go through them yourself (rule 2): check each one a check can settle and close it with
    `dreamem decide Q <answer> --verified "<what you checked>"`, then steps 4–5 for any call it prints. Your "it holds"
-   (`keep`, `yes`) writes nothing to memory: dreamem keeps it, and that fact's text rests for a month. A duplicate is
-   yours only when both texts are the same; a retelling is the person's. Then, for each question left, ask the
-   person plainly. Sections and the answers each takes:
-   - `duplicate` [D-n] — two facts look like one: **yes** (merge) / **not-duplicates**.
+   (`keep`, `yes`) writes nothing to memory: dreamem keeps it, and that fact's text rests for a month. A duplicate
+   is yours when you compared both texts and found no contradiction (the same people in the same roles, numbers,
+   dates, places; nothing negated); say in `--verified` why they are one. When the second says more, merge with
+   `--text` holding both. Any doubt: the person's. Then, for each question left, ask the person plainly. Sections and the answers each takes:
+   - `duplicate` [D-n] — two facts look like one: **yes** (merge; with `--text`, the text that keeps both is then
+     set on the fact that stays — two calls) / **not-duplicates**.
    - `external_duplicate` — two MCP observations look alike: **drop-copy** deletes the second observation only,
      after checking both exact texts; **keep-both** leaves both in place. There is no merge or history.
    - `conflict` — a fact contradicts what memory says: **changed** (the new state, give `--text`) / **outdated** /

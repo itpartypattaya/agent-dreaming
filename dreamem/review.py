@@ -177,9 +177,8 @@ def show(homes: Homes, *, profile: str | None = None, as_json: bool = False, inc
 
 
 def _agent_stale(homes: Homes, name: str, q: dict, answer: str) -> str | None:
-    """What changed since the night that the agent's answer stands on, or None. A rewrite reads the fact again: the
-    person may have confirmed it since (its version stays, its origin does not), and the agent may rewrite only its
-    own `inferred` fact. A note dropped as a copy needs the kept side as it was shown too."""
+    """What changed since the night that the agent's answer stands on, or None. A rewrite reads the fact again: its
+    check was of the text shown. A note dropped as a copy needs the kept side as it was shown too."""
     state_dir = homes.profile(name) / "state"
     if answer in questions.REWRITES and q.get("fact_id") is not None:
         now = providers.for_question(q, state_dir).heads([q["fact_id"]]).get(int(q["fact_id"]))

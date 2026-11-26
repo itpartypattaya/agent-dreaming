@@ -210,35 +210,36 @@
  },
  "duplicate/yes": {
   "answer": "yes",
-  "call": {
-   "args": {
-    "expect": {
-     "7": 12,
-     "9": 30
-    },
-    "fact_id": 7,
-    "from": [
-     9
-    ]
-   },
-   "tool": "memory_merge"
-  },
+  "call": null,
   "status": "decided",
   "text": "new text",
   "todo": {
-   "call": {
-    "args": {
-     "expect": {
-      "7": 12,
-      "9": 30
+   "calls": [
+    {
+     "args": {
+      "expect": {
+       "7": 12,
+       "9": 30
+      },
+      "fact_id": 7,
+      "from": [
+       9
+      ]
      },
-     "fact_id": 7,
-     "from": [
-      9
-     ]
+     "tool": "memory_merge"
     },
-    "tool": "memory_merge"
-   },
+    {
+     "args": {
+      "content": "new text",
+      "expect": {
+       "7": 12
+      },
+      "fact_id": 7,
+      "origin": "said"
+     },
+     "tool": "memory_change"
+    }
+   ],
    "check": {
     "database": "C:/holo/memory_store.db"
    }

@@ -13,10 +13,14 @@ was done and merged"). On the night of 25.11 this was done by hand, and showed w
   `memory_feedback confirmed`, which says you agreed. dreamem keeps a digest of that fact's exact text (for a
   conflict, with what it was set against; no words) and does not ask about it for 30 days. A new text it gives is
   `origin: inferred`, and is not asked about the next night as "an agent stored this".
+- A technical fact the agent corrects whoever stored it (Anton's rule of 16.11.2026), when the check gave a clear
+  result; which facts are technical is the skill's rule. The fact's version is read again right before the call.
+- The agent merges two facts it compared and found no contradiction in. When the second says more, `yes --text`
+  gives the text that keeps both: a merge, then `memory_change` of the fact that stays (the person can do the
+  same). A merge that would drop words only the second fact has is refused without it.
 - dreamem refuses the agent what is yours: forget, reject, no, wrong, "people keep saying it", "said again", possible
-  new facts; ending or rewriting a fact that is not an agent's own (`inferred` — read again right before the call,
-  so a confirmation since the night counts); a rewrite or delete where no old text is kept (MCP `memory`, Claude
-  Code notes); a duplicate that is not the same text twice.
+  new facts; a rewrite or delete where no old text is kept (MCP `memory`, Claude Code notes) unless it is the same
+  text as what is kept.
 - "An agent stored this lately" and "corroborated — confirm?" take **changed**: a version moved on. Before, only
   **wrong** took a new text, and on 25.11 the agent called `memory_change` past dreamem.
 - A question counts as answered only once its memory call succeeded. A recorded answer whose call was never made (the

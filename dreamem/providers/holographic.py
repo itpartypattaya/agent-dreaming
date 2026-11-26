@@ -41,7 +41,13 @@ def _merge(q, text):
             "expect": {str(keep["fact_id"]): keep["version_id"], str(copy["fact_id"]): copy["version_id"]}}
     if q.get("keywords_after"):
         args["keywords"] = q["keywords_after"]
-    return {"tool": "memory_merge", "args": args}
+    merge = {"tool": "memory_merge", "args": args}
+    if not text:
+        return merge
+    # The text that keeps what both said (0.9.0): the fact that stays takes it after the merge (a merge leaves its
+    # version as it was, so the change is checked against the version shown). The person's text is `said`.
+    return [merge, {"tool": "memory_change", "args": {"fact_id": keep["fact_id"], "content": text, "origin": "said",
+                                                      "expect": {str(keep["fact_id"]): keep["version_id"]}}}]
 
 
 _FACT_ANSWERS = {"yes": _feedback("confirmed"), "no": _feedback("unhelpful"), "outdated": _end,

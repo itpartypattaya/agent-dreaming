@@ -327,12 +327,17 @@ and records its answer with `dreamem decide Q <answer> --verified "<what it chec
   up at every check. dreamem keeps a digest of that fact's exact text (for a conflict, with what it was set against)
   in `agent-checked.json` — no words — and does not ask about it for 30 days. Another text, version or contradiction
   is asked about. A note's `keep` rests as yours does (the engine's own 14 days).
-- **It moved on** (`changed`, `outdated`): only in a store that keeps the old text (holographic-memory), and only
-  for a fact an agent stored (`origin: inferred`) — never one you said or confirmed, nor one of unknown origin
-  (it may be yours from before origins were kept). The origin and version are read again right before the call.
-  Its new text is `inferred`, not yours, and rests too; an ended fact needs no rest.
-- **Duplicates**: only the same text twice (spaces aside, case kept). A retelling — even «A pays B» and «B pays A»,
-  which share every word — is yours to judge. A note is deleted as a copy only while the kept side is as shown.
+- **It moved on** (`changed`, `outdated`): a technical fact — a version, a path, a config, the state of code or a
+  server — whoever stored it, when the check gave a clear result (Anton's rule since 16.11.2026); only in a store
+  that keeps the old text (holographic-memory: you can see it in the history and revert). The version is read
+  again right before the call: a fact changed since the night is not rewritten on a check of its old text. The
+  new text is `inferred` — the agent's conclusion, not your words — and rests too; an ended fact needs no rest.
+- **Duplicates**: the agent merges two facts it compared and found no contradiction in — the same people in the
+  same roles, the same numbers, dates and places, nothing negated. When the second says something the first does
+  not (an IP, a day), it gives the text that keeps both (`yes --text`): the merge is followed by a
+  `memory_change` of the fact that stays, and dreamem refuses a merge that would drop words only the second has.
+  Any doubt — yours. Deleting where nothing is kept (an MCP `memory` observation, a Claude Code note) only of the
+  same text, and only while the kept side is as shown.
 - **Always yours**: forget, reject, no, wrong, "people keep saying it" and "said again" (their point is your
   word), possible new facts, your preferences, decisions, people, family, health and plans, and anything the agent
   could not confirm beyond doubt. `dreamem` refuses these to an answer given with `--verified`. It cannot tell an

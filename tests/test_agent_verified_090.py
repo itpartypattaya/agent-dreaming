@@ -106,15 +106,9 @@ def test_the_agent_merges_a_duplicate_and_the_night_is_acknowledged_by_who_answe
     doc = night(world)
     dup = next(q for q in doc["questions"] if q["section"] == "duplicate")
     new = next(q for q in doc["questions"] if q["section"] == "new_fact")
-    code, out = printed(review.decide, world.homes, dup["qid"], "yes", verified="the same supplier and day")
-    assert code == 2 and "only the person" in out  # a retelling, not the same text: the person's to judge
-    data = world.questions()
-    for q in data["questions"]:  # the same text saved twice: the agent's to merge
-        if q["qid"] == dup["qid"]:
-            q["copy"]["content"] = q["keep"]["content"]
-    (world.homes.profile("global") / "questions.json").write_text(json.dumps(data, ensure_ascii=False),
-                                                                encoding="utf-8")
-    code, out = printed(review.decide, world.homes, dup["qid"], "yes", verified="the same text twice")
+    # Anton, 26.11: a retelling the agent compared and found no contradiction in, it merges itself
+    code, out = printed(review.decide, world.homes, dup["qid"], "yes", text=COFFEE[0],
+                        verified="the same supplier, the same day; the first is fuller (утром)")
     assert code == 0 and '"memory_merge"' in out
     review.mark(world.homes, dup["qid"], "applied", out=quiet)
     review.decide(world.homes, new["qid"], "yes", out=quiet)
@@ -159,13 +153,16 @@ def test_what_only_the_person_can_answer_is_refused_to_the_agent(world):
     assert refused(candidate, "not-a-fact")  # judged as before, without --verified
 
 
-def test_the_agent_never_ends_or_rewrites_the_persons_own_words():
-    """Fable review: an unknown origin may be the person's words stored before origins were kept."""
-    for origin in ("said", "confirmed", None):
-        for section in ("conflict", "fact_decay", "outcome", "new_fact"):
-            for answer in ("changed", "outdated"):
-                assert refused(fact_q(section, origin=origin), answer, "новый текст"), (origin, section, answer)
-            hold = "yes" if section == "new_fact" else "keep"
+def test_a_technical_fact_is_the_agents_to_correct_whoever_stored_it():
+    """Anton (16.11, 26.11): the agent checks a technical fact and corrects it by the result, whoever stored it — which
+    facts are technical is the skill's rule. Its new text is its own conclusion, `inferred`."""
+    for origin in ("said", "confirmed", None, "inferred"):
+        for section in ("conflict", "fact_decay", "outcome", "review", "new_fact"):
+            todo = questions.decide(fact_q(section, origin=origin), "changed", "версия 0.31.7", by_agent=CHECKED)
+            assert todo["call"]["tool"] == "memory_change" and todo["call"]["args"]["origin"] == "inferred"
+            assert questions.decide(fact_q(section, origin=origin), "outdated", by_agent=CHECKED)["call"]["tool"] \
+                == "memory_end"
+            hold = "yes" if section in ("review", "new_fact") else "keep"
             assert questions.decide(fact_q(section, origin=origin), hold, by_agent=CHECKED) == {}
 
 
@@ -182,17 +179,30 @@ def test_the_agent_never_erases_what_a_store_cannot_give_back():
         assert refused(fact_q(section, note=note), answer, "new body"), (section, answer)
 
 
-def test_the_agent_drops_or_merges_only_a_copy_that_adds_nothing():
-    keep = {"fact_id": 1, "version_id": 1, "content": COFFEE[0]}
-    more = {"fact_id": 2, "version_id": 1, "content": COFFEE[1], "covered": False, "extra_words": ["зёрна"]}
+def test_a_merge_never_loses_what_only_the_second_fact_says():
+    """Anton, 26.11: the agent merges a retelling it found no contradiction in; when one side has more (an IP), that
+    side's text, or one holding both, stays."""
+    keep = {"fact_id": 1, "version_id": 4, "content": "Домены живут на сервере app-box"}
+    more = {"fact_id": 2, "version_id": 9, "content": "Домены на app-box (10.0.0.7)", "covered": False,
+            "extra_words": ["10.0.0.7"]}
     dup = {"qid": "Q1-ab12", "section": "duplicate", "proposal": "D-1", "keep": keep, "copy": more, "store": "x",
            "status": "shown"}
-    assert refused(dup, "yes")
-    swapped = {**dup, "keep": {**keep, "content": "Alice pays Bruno 50 every month"},
-               "copy": {**more, "content": "Bruno pays Alice 50 every month", "covered": True}}
-    assert refused(swapped, "yes")  # every word shared, the meaning turned round (Codex review)
-    twin = {**dup, "copy": {**more, "content": "  " + COFFEE[0].replace(" ", "  "), "covered": True}}
-    assert questions.decide(twin, "yes", by_agent=CHECKED)["call"]["tool"] == "memory_merge"
+    try:
+        questions.decide(dict(dup), "yes", by_agent=CHECKED)
+    except ValueError as exc:
+        assert "10.0.0.7" in str(exc) and "--text" in str(exc)
+    else:
+        raise AssertionError("merged away the IP only the second fact had")
+    both = "Домены живут на сервере app-box (10.0.0.7)"
+    todo = questions.decide(dict(dup), "yes", both, by_agent=CHECKED)
+    merge, change = todo["calls"]
+    assert merge["tool"] == "memory_merge" and merge["args"]["fact_id"] == 1 and merge["args"]["from"] == [2]
+    assert change == {"tool": "memory_change", "args": {"fact_id": 1, "content": both, "origin": "inferred",
+                                                        "expect": {"1": 4}}}
+    by_person = questions.decide(dict(dup), "yes", both)  # the person may give the text too: then it is theirs
+    assert by_person["calls"][1]["args"]["origin"] == "said"
+    covered = {**dup, "copy": {**more, "content": "Домены на сервере app-box", "covered": True}}
+    assert questions.decide(covered, "yes", by_agent=CHECKED)["call"]["tool"] == "memory_merge"
     loc = {"entity": "Shop", "text": "t"}
     ext = {"qid": "Q2-ab12", "section": "external_duplicate", "provider": "mcp-memory", "store": "m.jsonl",
            "status": "shown", "pair": "p", "keep": {"fact_id": 1, "content": "Shop opens at 9", "locator": loc},
@@ -277,14 +287,9 @@ def test_forgetting_the_fact_removes_the_agents_account_of_its_check(world):
 # -- after the code review (Codex and Fable) --------------------------------------------------------------------------
 
 
-def test_a_fact_the_person_confirmed_after_the_night_is_not_the_agents_to_rewrite(world):
-    """A confirmation keeps the version: the night's snapshot still says `inferred`."""
+def test_a_fact_changed_since_the_night_is_not_rewritten_on_a_check_of_its_old_text(world):
     fid = world.fact(VERSION, origin="inferred", days_old=2)
     q = night(world)["questions"][0]
-    world.sql("insert into fact_confirmations (fact_id, confirmed_at) values (?, '2026-11-26 10:00:00')", (fid,))
-    code, out = printed(review.decide, world.homes, q["qid"], "outdated", verified=CHECKED)
-    assert code == 2 and "only the person" in out and "confirmed" in out
-    assert only(world).get("answer") is None
     world.change(fid, "Плагин holographic на сервере — версии 0.31.7")  # changed since: back as it is now
     code, out = printed(review.decide, world.homes, q["qid"], "outdated", verified=CHECKED)
     assert code == 1 and "changed" in out and only(world)["status"] == questions.FAILED
@@ -359,6 +364,19 @@ def test_a_note_is_dropped_as_a_copy_only_while_the_kept_one_is_as_shown(world):
         f.write("Только по средам.\n")
     code, out = printed(review.decide, world.homes, q["qid"], "drop-note", verified="the same text")
     assert code == 1 and "changed" in out
+
+
+def test_the_fact_kept_after_a_merge_with_both_texts_is_not_asked_about_the_next_night(world):
+    keep = world.fact(COFFEE[0], origin="said", days_old=40)
+    copy = world.fact(COFFEE[1], origin="said", days_old=3)
+    dup = next(q for q in night(world)["questions"] if q["section"] == "duplicate")
+    both = COFFEE[0] + " (зёрна)"
+    review.decide(world.homes, dup["qid"], "yes", text=both, verified="one supplier, one day", out=quiet)
+    kept = dup["keep"]["fact_id"]
+    world.end(copy if kept == keep else keep)  # what memory_merge does to the copy, near enough for the night
+    world.correct(kept, both, origin="inferred")  # and memory_change to the fact that stays
+    review.mark(world.homes, dup["qid"], "applied", out=quiet)
+    assert not about(night(world), kept)
 
 
 def test_an_outcome_decided_under_0_8_whose_call_was_never_made_comes_back(world):

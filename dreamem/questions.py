@@ -50,10 +50,12 @@ ANSWERS = holographic.ANSWERS
 LATER = "later"  # any section: not now, ask again tomorrow
 
 PERSON, AGENT = "person", "agent"  # who answered (``by``); a question decided before 0.9.0 names nobody
-# What the review agent may close on its own check (Anton, 26.11.2026: versions, paths, configs, the state of code and
-# servers, what a transcript says, two facts that say the same — the agent checks and closes; the rest is the
-# person's). Never: forget, reject, no, wrong (a correction leaves no past), a promotion or a confirmation (their
-# point is the person's word), a new candidate (judged as before), a note's deletion or a rewrite of one.
+# What the review agent may close on its own check (Anton, 16.11 and 26.11.2026: a technical fact — a version, a path,
+# a config, the state of code or a server — the agent checks and confirms or corrects by the result, whoever stored
+# it; two facts it compared and found no contradiction in, it merges). Which facts are technical is the skill's rule:
+# nothing here tells a version from a preference. Never: forget, reject, no, wrong (a correction leaves no past), a
+# promotion or a confirmation (their point is the person's word), a new candidate (judged as before), a note's
+# deletion or a rewrite of one.
 AGENT_ANSWERS = {
     "duplicate": {"yes", "not-duplicates"},
     "external_duplicate": {"drop-copy", "keep-both"},
@@ -61,13 +63,13 @@ AGENT_ANSWERS = {
     "conflict": {"keep", "changed", "outdated"},
     "fact_decay": {"keep", "changed", "outdated"},
     "outcome": {"keep", "changed", "outdated"},
-    "review": {"yes"},  # a fact of unknown origin: nothing tells it is not the person's words (see REWRITES)
+    "review": {"yes", "changed", "outdated"},
     "new_fact": {"yes", "changed", "outdated"},
     "note_decay": {"keep"},
 }
 HOLDS = ("keep", "yes")             # the agent's "it holds": no memory call, a rest in AGENT_FILE
-# Only in a store that keeps the old text, and only of an agent's own fact (`inferred`): an unknown origin may be the
-# person's words stored before origins were kept. The origin is read again right before the call (review.decide).
+# Only in a store that keeps the old text (the person can see and revert it). The fact's version is read again right
+# before the call (review.decide): a fact changed since the night is not rewritten on a check of its old text.
 REWRITES = ("changed", "outdated")
 VERIFIED_CHARS = 300
 AGENT_FILE = "agent-checked.json"  # in a profile's state: texts the agent checked (digests, ids — no words)
@@ -81,25 +83,25 @@ def _flat(text) -> str:
 
 
 def same_text(a, b) -> bool:
-    """Whether two texts say exactly the same: the only duplicate the agent removes on its own (a retelling — even
-    "A pays B" and "B pays A", which share every word — is the person's to judge)."""
+    """Whether two texts say exactly the same: the only copy deleted where no old text is kept (an MCP observation, a
+    Claude Code note)."""
     return bool(_flat(a)) and _flat(a) == _flat(b)
 
 
-def _agent_may(q: dict, answer: str, writer) -> None:
+def _agent_may(q: dict, answer: str, writer, text: str | None = None) -> None:
     """Raise unless the review agent may give *answer* to *q* on its own check."""
     section = q.get("section")
     person = f"{q.get('qid')}: only the person can answer {section} with '{answer}'"
     if answer not in AGENT_ANSWERS.get(section, ()):
         raise ValueError(person)
-    if answer in REWRITES:
-        if HISTORY not in writer.capabilities:
-            raise ValueError(f"{person}: {writer.title or writer.name} keeps no old text")
-        if q.get("origin") != "inferred":
-            raise ValueError(f"{person}: the fact may be the person's own words (origin {q.get('origin') or 'unknown'})")
-    if section == "duplicate" and answer == "yes" and not same_text(q["keep"].get("content"),
-                                                                    q["copy"].get("content")):
-        raise ValueError(f"{person}: the two texts are not the same word for word")
+    if answer in REWRITES and HISTORY not in writer.capabilities:
+        raise ValueError(f"{person}: {writer.title or writer.name} keeps no old text")
+    if section == "duplicate" and answer == "yes" and not text and (q.get("copy") or {}).get("covered") is False:
+        # A merge keeps the first text: what only the second says would leave memory. The agent gives the text that
+        # holds both (--text), or the second one's.
+        extra = ", ".join((q.get("copy") or {}).get("extra_words") or [])
+        raise ValueError(f"{q.get('qid')}: the second fact has words the first lacks ({extra}); merge with --text \"the "
+                         "text that keeps both\"")
     if answer == "drop-copy" and not same_text(q["copy"].get("content"), q["keep"].get("content")):
         raise ValueError(f"{person}: the two texts are not the same word for word")
     if answer == "drop-note":
@@ -417,15 +419,19 @@ def agent_checked(state_dir: Path, days: int = AGENT_REST_DAYS) -> set:
 def note_agent_check(state_dir: Path, q: dict, on: bool) -> None:
     """Record (``on``: its answer is settled) or drop (undo, failed) the rest of the review agent's own answer about a
     fact: its "it holds" or the new text it gave — not an "outdated" (the fact no longer holds: nothing to ask). The
-    key and the fact's id only, never the words or the check (they may quote the fact); rests past their days go."""
-    if q.get("by") != AGENT or q.get("section") not in RESTING or q.get("fact_id") is None:
+    key and the fact's id only, never the words or the check (they may quote the fact); rests past their days go. A
+    merge with the text that keeps both rests that text of the fact that stays."""
+    merged = q.get("section") == "duplicate" and q.get("answer") == "yes" and q.get("text")
+    fid = (q.get("keep") or {}).get("fact_id") if merged else q.get("fact_id")
+    if q.get("by") != AGENT or (q.get("section") not in RESTING and not merged) or fid is None:
         return
     now = datetime.now().astimezone()
     data = {k: rec for k, rec in _rests(state_dir).items() if _fresh(rec, now) and rec.get("qid") != q.get("qid")}
-    text = q.get("text") if q.get("answer") == "changed" else q.get("content") if q.get("answer") in HOLDS else None
+    text = q.get("text") if q.get("answer") == "changed" or merged else \
+        q.get("content") if q.get("answer") in HOLDS else None
     if on and text:
-        data[rest_key(q["fact_id"], text, q.get("conflicts") if q.get("section") == "conflict" else None)] = {
-            "fact_id": q["fact_id"], "qid": q["qid"], "at": now.isoformat(timespec="seconds")}
+        data[rest_key(fid, text, q.get("conflicts") if q.get("section") == "conflict" else None)] = {
+            "fact_id": fid, "qid": q["qid"], "at": now.isoformat(timespec="seconds")}
     write_json(state_dir / AGENT_FILE, data)
 
 
@@ -558,7 +564,7 @@ def decide(q: dict, answer: str, text: str | None = None, by_agent: str | None =
     if q.get("status") in CLOSED:
         raise ValueError(f"{q['qid']} is already {q['status']} ({q.get('answer')}); 'dreamem undo {q['qid']}' first")
     if by_agent is not None:
-        _agent_may(q, answer, writer)
+        _agent_may(q, answer, writer, text)
     action = table[answer]
     if by_agent is not None and answer in HOLDS and q.get("section") not in ("duplicate", "new_candidate"):
         action = NOTHING  # not the person's "confirmed", and no trust vote at every check: a rest of our own
