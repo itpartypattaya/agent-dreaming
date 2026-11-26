@@ -107,6 +107,7 @@ def gather(homes: Homes, settings: dict, now: float, *, keep: bool = True) -> di
         got, cov = src_gemini.read_gemini(homes.gemini, since, now)
         msgs += got
         coverage["gemini-cli"] = cov.as_dict()
+    times = [m.ts for m in msgs]  # every message read, a screened one too: when the person wrote (0.9.1)
     kept, screened = screen.messages(msgs, int(settings.get("max_message_chars", 2000)))
     projects = _Projects()
     for m in kept:
@@ -130,7 +131,7 @@ def gather(homes: Homes, settings: dict, now: float, *, keep: bool = True) -> di
     basic_notes, basic_secret = screen.dedupe_targets(basic_notes)
     instr, instr_secret = screen.dedupe_targets(
         notes.instructions(notes.instruction_files(homes.claude, homes.codex, projects.roots(), homes.gemini)))
-    return {"messages": kept, "coverage": coverage, "screened": screened, "projects": projects,
+    return {"messages": kept, "times": times, "coverage": coverage, "screened": screened, "projects": projects,
             "auto": auto, "pressure": pressure, "codex_notes": codex_notes, "basic_notes": basic_notes,
             "instructions": instr,
             "notes_ok": not problems and not codex_problems and not basic_problems,
@@ -267,6 +268,9 @@ def pass_profile(pdir: Path, profile: config.Profile, settings: dict, tz: str, d
             pair["key"] = questions.pair_key(pair["note"].text, other.text if other else pair["fact"]["content"])
             if not questions.pair_rests(state_dir, pair["key"]):
                 pairs.append(pair)
+    audit, audit_held = questions.unbacked_answers(
+        previous, data.get("times") or [],
+        all(c["status"] == COMPLETE for c in data["coverage"].values()))
     qs, skipped = questions.build(result, store=str(profile.store) if profile.store else None, facts=facts,
                                   notes_index=index, coverage_ok=coverage_ok,
                                   max_questions=int(settings.get("max_questions", 7)), profile=profile.name,
@@ -274,7 +278,9 @@ def pass_profile(pdir: Path, profile: config.Profile, settings: dict, tz: str, d
                                   answered=questions.outcomes_answered(state_dir),
                                   rejected=set(rejected) if isinstance(rejected, dict) else set(), candidates=offered,
                                   provider=prov, note_pairs=pairs, notes=auto, external_pairs=external_pairs,
-                                  checked=questions.agent_checked(state_dir))
+                                  checked=questions.agent_checked(state_dir), unbacked=audit)
+    if audit_held:
+        skipped["unbacked:coverage"] = audit_held
     alerts = [a for a in result.get("alerts") or []
               if coverage_ok or a.get("kind") not in ("memory_loss", "entry_truncated", "probe_missing")]
     if external_budget:

@@ -39,6 +39,10 @@ def facts_state(path: Path | None, ids) -> dict[int, dict]:
             if int(fid) not in out:
                 out[int(fid)] = {"version_id": vid, "content": text, "origin": org if org in ORIGINS else None,
                                  "status": status}
+        if "category" in _columns(conn, "facts"):  # holographic's own label: user_pref is the person's (0.9.1)
+            for fid, category in conn.execute(f"select fact_id, category from facts where fact_id in ({marks})", ids):
+                if int(fid) in out:
+                    out[int(fid)]["category"] = category
         if _columns(conn, "fact_confirmations"):
             for (fid,) in conn.execute(f"select distinct fact_id from fact_confirmations where fact_id in ({marks})", ids):
                 rec = out.setdefault(int(fid), {"version_id": None, "content": None, "origin": None, "status": None})

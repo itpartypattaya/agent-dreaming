@@ -176,6 +176,16 @@ def show(homes: Homes, *, profile: str | None = None, as_json: bool = False, inc
         return 0
 
 
+def _preference(homes: Homes, name: str, q: dict) -> int | None:
+    """A fact of the question its store keeps as the person's preference (holographic-memory's `user_pref`), read
+    now: the agent's check never settles it, whatever it calls technical (0.9.1). None when there is none."""
+    ids = questions.fact_ids(q)
+    if not ids:
+        return None
+    heads = providers.get(q.get("provider"), q.get("store"), homes.profile(name) / "state").heads(ids)
+    return next((i for i in sorted(ids) if (heads.get(i) or {}).get("category") == "user_pref"), None)
+
+
 def _agent_stale(homes: Homes, name: str, q: dict, answer: str) -> str | None:
     """What changed since the night that the agent's answer stands on, or None. A rewrite reads the fact again: its
     check was of the text shown. A note dropped as a copy needs the kept side as it was shown too."""
@@ -236,6 +246,11 @@ def decide(homes: Homes, qid: str, answer: str, *, text: str | None = None, prof
                 out("error: an observation changed or is gone; nothing was recorded")
                 return 1
         if verified is not None and q.get("status") not in questions.CLOSED:
+            mine = _preference(homes, name, q)
+            if mine is not None:
+                out(f"error: {q['qid']}: only the person can answer this — fact #{mine} is stored as their preference "
+                    "(user_pref); nothing was recorded, ask them")
+                return 2
             stale = _agent_stale(homes, name, q, answer.strip().lower())
             if stale:
                 questions.failed(q, "changed_since")

@@ -260,6 +260,7 @@ def test_a_decided_call_never_made_comes_back_the_next_night(world):
     review.decide(world.homes, q["qid"], "yes", out=quiet)  # prints memory_feedback; never made
     again = about(night(world), fid)
     assert again and again[0]["section"] == "new_fact"
+    world.reply("да")  # the person said it (0.9.1: the next night looks)
     review.decide(world.homes, again[0]["qid"], "yes", out=quiet)
     review.mark(world.homes, again[0]["qid"], "applied", out=quiet)
     assert not about(night(world), fid)
