@@ -1,7 +1,8 @@
 """Claude Code's memory notes (auto memory, subagents' memory) as answers go into them.
 
 Claude reads and writes these files in every session, and the person may edit or delete them at any time; the review
-writes them the same way — the agent of the session, on the person's answer. The pass never does. Before an edit the
+writes them the same way — the agent of the session, on the person's answer (or, for a note that only repeats what
+is kept, on its own check). The pass never does. Before an edit the
 agent runs ``dreamem verify <Q>``: the file must be byte for byte the one the person was shown (its sha256); then it
 replaces the exact old text, which fails by itself if the file changed in between. A delete removes the file and its
 line in ``MEMORY.md``. A note has no history: "outdated" deletes it, and the question says so.

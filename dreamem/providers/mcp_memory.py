@@ -60,7 +60,8 @@ def _save(q, text):
     return _add(q["entity"], text)
 
 
-_FACT = {"yes": NOTHING, "no": NOTHING, "outdated": _delete, "wrong": _replace, "forget": _delete, "reject": REJECT}
+_FACT = {"yes": NOTHING, "no": NOTHING, "outdated": _delete, "changed": _replace, "wrong": _replace,
+         "forget": _delete, "reject": REJECT}
 ANSWERS = {
     "external_duplicate": {"drop-copy": lambda q, text: _delete({"locator": q["copy"]["locator"]}, text),
                            "keep-both": NOTHING},

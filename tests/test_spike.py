@@ -104,7 +104,8 @@ def test_only_answered_questions_rest(world):
     fact_q = next(v for (s, k), v in by.items() if s == "new_fact")
     note_q = by[("note_decay", "deploy")]
     review.decide(world.homes, fact_q, "yes", out=lambda *_: None)
-    review.decide(world.homes, note_q, "keep", out=lambda *_: None)
+    review.mark(world.homes, fact_q, "applied", out=lambda *_: None)  # 0.9.0: a call rests once it was made
+    review.decide(world.homes, note_q, "keep", out=lambda *_: None)  # needs no call: rests at once
     second = night(world)
     assert second["acknowledged"]
     left = {(q["section"], q.get("fact_id") or q["note"]["name"]) for q in second["questions"]}

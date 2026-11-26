@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from .questions import CLOSED, DEFERRED, OPEN
+from .questions import CLOSED, DEFERRED, OPEN, settled
 
 SECTION_TITLE = {
     "duplicate": "look like one fact — merge?",
@@ -117,9 +117,19 @@ def render(doc: dict) -> str:
             lines.append(f"(+{deferred} more on another night)")
     else:
         lines.append("No questions tonight.")
-    done = [q for q in qs if q["status"] in CLOSED]
-    if done:
-        lines += ["", f"Answered: {', '.join(q['qid'] + ' ' + str(q['answer']) for q in done)}."]
+    done = [q for q in qs if q["status"] in CLOSED and settled(q)]
+    said = [q for q in done if q.get("by") != "agent"]
+    checked = [q for q in done if q.get("by") == "agent"]
+    waiting = [q for q in qs if q["status"] in CLOSED and not settled(q)]
+    if waiting:
+        lines += ["", f"Waiting for the memory call: {', '.join(q['qid'] + ' ' + str(q['answer']) for q in waiting)} "
+                  "(asked again the next night unless it is made)."]
+    if said:
+        lines += ["", f"Answered: {', '.join(q['qid'] + ' ' + str(q['answer']) for q in said)}."]
+    if checked:
+        lines += ["", "Closed by the agent on its own check:"]
+        lines += [f"- {q['qid']} {q['answer']}" + (f" — {q['verified']}" if q.get("verified") else "")
+                  for q in checked]
     notes = []
     if doc.get("store_coverage"):
         notes.append(f"- the store was read only in part ({', '.join(doc['store_coverage'].get('problems') or [])}): "

@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.9.0 — 2026-11-26
+
+The review agent closes the questions a check settles, and asks you only the rest (Anton: "a technical question you
+must find out yourself and close without me; ask only where you find no clear confirmation; I get a summary of what
+was done and merged"). On the night of 25.11 this was done by hand, and showed what was missing.
+
+- `dreamem decide Q <answer> --verified "<what was checked>"`: the agent's own answer — a version on the server, a
+  path, a config, what you said in a session, a duplicate that adds nothing. `dreamem list` and `report.md` show
+  these apart from your answers, with what was checked; the review ends with a summary.
+- It is never recorded as yours. Its "it holds" (`keep`, `yes`) writes nothing to memory: before, the only way was
+  `memory_feedback confirmed`, which says you agreed. dreamem keeps a digest of that fact's exact text (for a
+  conflict, with what it was set against; no words) and does not ask about it for 30 days. A new text it gives is
+  `origin: inferred`, and is not asked about the next night as "an agent stored this".
+- A technical fact the agent corrects whoever stored it (Anton's rule of 16.11.2026), when the check gave a clear
+  result; which facts are technical is the skill's rule. The fact's version is read again right before the call.
+- The agent merges two facts it compared and found no contradiction in. When the second says more, `yes --text`
+  gives the text that keeps both: a merge, then `memory_change` of the fact that stays (the person can do the
+  same). A merge that would drop words only the second fact has is refused without it.
+- dreamem refuses the agent what is yours: forget, reject, no, wrong, "people keep saying it", "said again", possible
+  new facts; a rewrite or delete where no old text is kept (MCP `memory`, Claude Code notes) unless it is the same
+  text as what is kept.
+- "An agent stored this lately" and "corroborated — confirm?" take **changed**: a version moved on. Before, only
+  **wrong** took a new text, and on 25.11 the agent called `memory_change` past dreamem.
+- A question counts as answered only once its memory call succeeded. A recorded answer whose call was never made (the
+  session ended) rested as answered for 14 days, and an "answer went wrong" report whose call was refused never came
+  back (also one decided under 0.8); both come back now. `report.md` lists such answers apart, as waiting.
+- A forgotten fact leaves an answered question too, with what the agent wrote about its check, and its rests.
+
+The plan and the code were reviewed by Codex (gpt-6.2-sol) and Fable 5.2; their findings are in this release.
+
 ## 0.8.5 — 2026-11-24
 
 - Example texts renamed: a few test facts, a README example and a comment of the screen use other invented

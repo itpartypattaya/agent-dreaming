@@ -87,6 +87,7 @@ def test_a_fact_answered_last_night_is_not_asked_about_in_another_section(world)
     shown = [q for q in first["questions"] if q.get("fact_id") == fid and q["status"] == "generated"]
     assert [q["section"] for q in shown] == ["conflict"]
     review.decide(world.homes, shown[0]["qid"], "keep", out=lambda *_: None)
+    review.mark(world.homes, shown[0]["qid"], "applied", out=lambda *_: None)  # 0.9.0: rests once the call is made
     assert [q["section"] for q in night(world)["questions"] if q.get("fact_id") == fid] == []
 
 

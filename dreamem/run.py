@@ -273,7 +273,8 @@ def pass_profile(pdir: Path, profile: config.Profile, settings: dict, tz: str, d
                                   night_tag=uuid.uuid4().hex[:4], went_wrong=wrong,
                                   answered=questions.outcomes_answered(state_dir),
                                   rejected=set(rejected) if isinstance(rejected, dict) else set(), candidates=offered,
-                                  provider=prov, note_pairs=pairs, notes=auto, external_pairs=external_pairs)
+                                  provider=prov, note_pairs=pairs, notes=auto, external_pairs=external_pairs,
+                                  checked=questions.agent_checked(state_dir))
     alerts = [a for a in result.get("alerts") or []
               if coverage_ok or a.get("kind") not in ("memory_loss", "entry_truncated", "probe_missing")]
     if external_budget:
@@ -388,6 +389,7 @@ def forget_sweep(homes: Homes, out=sys.stdout) -> int:
             if scrubbed:
                 write_json(pdir / "questions.json", doc)
                 write_private(pdir / "report.md", report.render(doc))
+            questions.drop_rests(pdir / "state", gone)  # the agent's rests of a forgotten fact (digests of its text)
             if gone & _fact_ids(read_json(pdir / "dream.json", {})):
                 # The night's output holds facts that never became a question too: removed whole, it is a record.
                 (pdir / "dream.json").unlink(missing_ok=True)

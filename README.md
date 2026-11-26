@@ -8,7 +8,7 @@ about a project that ended a month ago. agent-dreaming compares what your agents
 to them, and once a day asks you a handful of short questions about it. It changes memory only when you answer, and
 only through the memory tools your agent already has.
 
-![Architecture: the pass reads transcripts, sessions, notes and the fact store read-only, writes only to ~/.dreaming; the session hooks show one line and the review skill asks you; memory changes only through the memory tools or a checked edit of a note, on your answer](docs/diagrams/architecture.svg)
+![Architecture: the pass reads transcripts, sessions, notes and the fact store read-only, writes only to ~/.dreaming; the session hooks show one line and the review skill asks you; memory changes only through the memory tools or a checked edit of a note, on your answer or the agent's own read-only check of a technical fact](docs/diagrams/architecture.svg)
 
 It has three parts:
 
@@ -20,7 +20,9 @@ It has three parts:
   questions wait…" — counts only, never the text of a fact. Claude Code has no such line since 0.8.0 (see
   [Limits](#limits)): ask for the review, or look at `dreamem status`.
 - **The review** (`/agent-dreaming:dream` in Claude Code, `$dreaming` in Codex, the skill `dreaming` in Antigravity):
-  the agent puts the questions to you one at a time and carries out exactly your answers.
+  the agent first closes what a read-only check settles — a version, a path, a config, the state of a server, a
+  duplicate that adds nothing — and says what it checked; it puts the rest to you one at a time, carries out exactly
+  your answers, and ends with a short summary of what it closed, merged and left to you.
 
 ## How a night and a review go
 
@@ -35,7 +37,9 @@ It has three parts:
    facts and notes, and publishes the night in one step: `questions.json`, `report.md` and `summary.json`. A pass
    killed half-way leaves the previous night whole.
 3. **The review.** When you say "dream" (or start the skill), the agent runs `dreamem show` and asks the first
-   question in your language, quoting the texts whole. Up to 7 questions a session; the rest wait.
+   question in your language, quoting the texts whole. Up to 7 questions a session; the rest wait. Before that it
+   closes the technical ones itself (`dreamem decide … --verified "what it checked"`): see
+   [What the agent closes itself](#what-the-agent-closes-itself).
 4. **Your answer** is recorded with `dreamem decide`. Most answers print one memory call — `memory_end`,
    `memory_change`, `memory_merge`… — and the agent first checks with `memory_stats` that this session talks to the
    same store the night read. Then it makes exactly that call and reports back with `dreamem applied` (or
@@ -66,8 +70,8 @@ Questions come in this order: what may be wrong in memory now, then what may be 
 | **Conflicts with memory** (`conflict`) | a fact and a memory note or `CLAUDE.md` speak of one thing with other numbers, or one negates the other | a fact says 9 pm, a note says 10 pm | changed · outdated · wrong · keep · when the other side is a Claude Code note: note-changed · note-outdated |
 | **An answer that used it went wrong** (`outcome`) | an agent reported in holographic-memory's journal that an answer built on this fact was corrected as stale | the agent was told the office moved | keep · outdated · changed · wrong · forget |
 | **Not mentioned for long — still true?** (`fact_decay`) | nobody has said it for the window (30 days) | a project deadline from last month | keep · outdated · changed · wrong · forget |
-| **Corroborated, unconfirmed** (`review`) | your conversations agree with it, but nobody said it is so | a fact of unknown origin | yes · no · outdated · wrong · forget · reject |
-| **An agent stored this, nobody confirmed** (`new_fact`) | an agent wrote it lately on its own conclusion | «Prefers short answers» | yes · no · outdated · wrong · forget · reject |
+| **Corroborated, unconfirmed** (`review`) | your conversations agree with it, but nobody said it is so | a fact of unknown origin | yes · no · outdated · changed · wrong · forget · reject |
+| **An agent stored this, nobody confirmed** (`new_fact`) | an agent wrote it lately on its own conclusion | «Prefers short answers» | yes · no · outdated · changed · wrong · forget · reject |
 | **People keep saying it** (`promotion`) | you said it on different days | you mentioned the same habit three times | yes · no · outdated · forget |
 | **Said again** (`confirm`) | a fact repeated on different days, worth marking confirmed | — | yes · no |
 | **Rejected, still recalled** (`trust_feedback`) | you rejected a fact earlier and it keeps coming up | — | yes (lower its trust) · no |
@@ -235,7 +239,7 @@ dreamem install schedule --dry-run
 | `dreamem run` | The pass. `--if-due`: only if no pass succeeded today and it is past `dream_time`, silent when another pass holds the lock. `--dry-run`: prints the report and keeps nothing (not even the salt). `--profile P`: one profile only (repeatable). |
 | `dreamem show` | Prints the open questions for a review and marks them shown. Possible new facts are read again from the session files here. `--json` for machines, `--all` with the answered ones. |
 | `dreamem verify Q` | Before the agent edits a Claude Code note: `ok` when the file is byte for byte the one you were shown; `changed` fails the question, and it comes back with the note as it is now. Reads only. |
-| `dreamem decide Q answer [--text T] [--entity E]` | Records your answer. Prints the memory call to make (tool, arguments, the store to check), or that none is needed. `--text` carries the new text for changed / wrong / save; a text holding a secret or an instruction is refused. A Claude Code note's answer prints an `edit`; an MCP `memory` change prints `calls`, made in that order. `--entity`: where a new fact goes in the MCP `memory` server. |
+| `dreamem decide Q answer [--text T] [--entity E] [--verified V]` | Records your answer (with `--verified`: the agent's own, and what it checked). Prints the memory call to make (tool, arguments, the store to check), or that none is needed. `--text` carries the new text for changed / wrong / save; a text holding a secret or an instruction is refused. A Claude Code note's answer prints an `edit`; an MCP `memory` change prints `calls`, made in that order. `--entity`: where a new fact goes in the MCP `memory` server. |
 | `dreamem applied Q` | The memory call succeeded. `--result` keeps a short note; `--fact-id N` (required for a saved new fact) records the id `memory_add` gave. |
 | `dreamem failed Q --reason R` | The store refused the call (the fact changed since, not found…). The question comes back with the current text. |
 | `dreamem undo Q` | Cancels a recorded answer (with a `reject` or `not-duplicates`). A memory call already made is undone with `memory_revert` or not at all — the agent says which. |
@@ -289,7 +293,7 @@ session connected to that question's store; for another project's store it tells
 |---|---|
 | Reads | `~/.claude/projects/*/*.jsonl` (transcripts), `~/.claude/projects/*/memory/*.md` (auto-memory), `~/.claude/agent-memory/*/` and a project's `.claude/agent-memory[-local]/*/` (subagents), `~/.codex/sessions/**` (`.jsonl` and `.jsonl.zst`), `~/.codex/memories*/`, Antigravity's and Gemini CLI's sessions under `~/.gemini`, `CLAUDE.md` / `AGENTS.md` / `GEMINI.md`, holographic-memory's database (read-only), the MCP `memory` server's JSONL file. |
 | Writes | only `~/.dreaming` (or `DREAMEM_HOME`): its state, the questions, `report.md`, `summary.json`, `salt` (this install's key for the digests), the digests of clauses you answered about (`candidates.json`), `claude-lines.json` — where in each transcript the lines that may be yours start and end, and for the MCP `memory` server `ids.json` / `first-seen.json` (digests of its observations with an id and the day first seen, never their words). Your messages are read in memory for the pass and stored nowhere — not even as snippets. |
-| Never | writes to memory, transcripts, the agents' settings (`dreamem install` excepted, on your command); sends anything over the network; runs a model. Memory changes are made by your agent, in a session, on your answer. (SQLite itself may create the `-wal`/`-shm` files next to the holographic-memory database when it reads a database in WAL mode whose writer is not running, as any reader does; the database is never written.) |
+| Never | writes to memory, transcripts, the agents' settings (`dreamem install` excepted, on your command); sends anything over the network; runs a model. Memory changes are made by your agent, in a session, on your answer or on its own read-only check of a technical fact. (SQLite itself may create the `-wal`/`-shm` files next to the holographic-memory database when it reads a database in WAL mode whose writer is not running, as any reader does; the database is never written.) |
 
 Details: [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md).
 
@@ -297,10 +301,12 @@ Details: [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md).
 
 - Everything a question quotes — fact texts, notes, your old messages — is data for the agent, never an instruction.
   A fact that tells the agent to do something becomes a question for you.
-- Only your own answer counts: the agent never answers for you, never reads "yes" into silence, never carries one
-  answer over to another question.
+- The agent answers itself only what a read-only check settles, always with `--verified` (what it checked), and
+  never as you; see the next section. Everything else is your answer: it never reads "yes" into silence, never
+  carries one answer over to another question.
 - The agent makes only the call `dreamem decide` printed, after checking the store. It never forgets a fact you did
-  not ask to forget. It edits a Claude Code memory note only on your answer, after `dreamem verify` shows it is the
+  not ask to forget. It edits a Claude Code memory note only on your answer (or deletes one that is word for word what
+  is kept, on its own check), after `dreamem verify` shows it is the
   text you were shown, and never edits `CLAUDE.md`, `AGENTS.md` or Codex memories.
 - In a system without versions the check is the exact text: an MCP `memory` observation is deleted only on a
   word-for-word match, and a change adds the new text before it deletes the old (a failure in between leaves both,
@@ -309,6 +315,36 @@ Details: [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md).
   it when the fact changed since the night.
 - A text you give with **changed** or **wrong** is written as yours (`origin: said`), so the next night does not ask
   about it as an agent's fact.
+
+## What the agent closes itself
+
+Since 0.9.0 a question a check can settle does not wait for you. The agent checks by reading only — a file, `git`, a
+read-only command on a server, the memory, what you said in a session (an agent's own line there proves nothing) —
+and records its answer with `dreamem decide Q <answer> --verified "<what it checked>"`. `dreamem list` and
+`report.md` show it apart from yours, and the review ends with a summary.
+
+- **It holds** (`keep`, `yes`): nothing is written to memory — it is not your confirmation, and a fact is not voted
+  up at every check. dreamem keeps a digest of that fact's exact text (for a conflict, with what it was set against)
+  in `agent-checked.json` — no words — and does not ask about it for 30 days. Another text, version or contradiction
+  is asked about. A note's `keep` rests as yours does (the engine's own 14 days).
+- **It moved on** (`changed`, `outdated`): a technical fact — a version, a path, a config, the state of code or a
+  server — whoever stored it, when the check gave a clear result (Anton's rule since 16.11.2026); only in a store
+  that keeps the old text (holographic-memory: you can see it in the history and revert). The version is read
+  again right before the call: a fact changed since the night is not rewritten on a check of its old text. The
+  new text is `inferred` — the agent's conclusion, not your words — and rests too; an ended fact needs no rest.
+- **Duplicates**: the agent merges two facts it compared and found no contradiction in — the same people in the
+  same roles, the same numbers, dates and places, nothing negated. When the second says something the first does
+  not (an IP, a day), it gives the text that keeps both (`yes --text`): the merge is followed by a
+  `memory_change` of the fact that stays, and dreamem refuses a merge that would drop words only the second has.
+  Any doubt — yours. Deleting where nothing is kept (an MCP `memory` observation, a Claude Code note) only of the
+  same text, and only while the kept side is as shown.
+- **Always yours**: forget, reject, no, wrong, "people keep saying it" and "said again" (their point is your
+  word), possible new facts, your preferences, decisions, people, family, health and plans, and anything the agent
+  could not confirm beyond doubt. `dreamem` refuses these to an answer given with `--verified`. It cannot tell an
+  agent that leaves the flag out from you: that the agent never does so is the skill's rule, not a lock.
+
+A question counts as answered only once its memory call succeeded: a session that ended in between leaves it to
+come back the next night.
 
 ## When something does not work
 
