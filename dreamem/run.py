@@ -389,6 +389,7 @@ def forget_sweep(homes: Homes, out=sys.stdout) -> int:
             if scrubbed:
                 write_json(pdir / "questions.json", doc)
                 write_private(pdir / "report.md", report.render(doc))
+            questions.drop_rests(pdir / "state", gone)  # the agent's rests of a forgotten fact (digests of its text)
             if gone & _fact_ids(read_json(pdir / "dream.json", {})):
                 # The night's output holds facts that never became a question too: removed whole, it is a record.
                 (pdir / "dream.json").unlink(missing_ok=True)

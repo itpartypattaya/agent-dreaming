@@ -19,9 +19,10 @@ carry out exactly their answers, then tell them in a few lines what was done.
    preferences, decisions, people, family, health, plans — and anything you could not confirm beyond doubt. Unsure
    which: theirs. Check only by reading (files, `git`, a read-only command over `ssh`, `memory_search`, a session
    file); a line counts from a session only when the person said it, not an agent. Your own answer always goes with
-   `--verified "<what you checked, a few plain words>"` — never record it as theirs. `dreamem` refuses what only the
-   person may answer (forget, reject, wrong, a promotion, a confirmation, ending or rewriting their own words, a
-   delete a store cannot give back, a merge whose copy says more): ask them. Never infer "yes" from silence, never
+   `--verified "<what you checked, a few plain words>"` — name the source, never quote a fact's text there, and
+   never record your answer as theirs. `dreamem` refuses what only the person may answer (forget, reject, no, wrong,
+   a promotion, a confirmation, ending or rewriting a fact that is not an agent's own `inferred` one, a delete a
+   store cannot give back, a duplicate that is not the same text): ask them. Never infer "yes" from silence, never
    carry one answer over to another question. "Not now" is a fine answer (`later`).
 3. **One question at a time** to the person, in their language, with the texts exactly as shown (never shorten a
    text of a "merge?" question: the person decides on the two whole texts). Up to 7 a session; the rest wait for
@@ -38,8 +39,8 @@ carry out exactly their answers, then tell them in a few lines what was done.
    days: see "When no pass runs on its own" below.
 2. First go through them yourself (rule 2): check each one a check can settle and close it with
    `dreamem decide Q <answer> --verified "<what you checked>"`, then steps 4–5 for any call it prints. Your "it holds"
-   (`keep`, `yes`) writes nothing to memory: dreamem keeps it, so the question rests for a month. Merge a duplicate
-   yourself only when the second text says nothing the first does not. Then, for each question left, ask the
+   (`keep`, `yes`) writes nothing to memory: dreamem keeps it, and that fact's text rests for a month. A duplicate is
+   yours only when both texts are the same; a retelling is the person's. Then, for each question left, ask the
    person plainly. Sections and the answers each takes:
    - `duplicate` [D-n] — two facts look like one: **yes** (merge) / **not-duplicates**.
    - `external_duplicate` — two MCP observations look alike: **drop-copy** deletes the second observation only,

@@ -70,8 +70,8 @@ Questions come in this order: what may be wrong in memory now, then what may be 
 | **Conflicts with memory** (`conflict`) | a fact and a memory note or `CLAUDE.md` speak of one thing with other numbers, or one negates the other | a fact says 9 pm, a note says 10 pm | changed · outdated · wrong · keep · when the other side is a Claude Code note: note-changed · note-outdated |
 | **An answer that used it went wrong** (`outcome`) | an agent reported in holographic-memory's journal that an answer built on this fact was corrected as stale | the agent was told the office moved | keep · outdated · changed · wrong · forget |
 | **Not mentioned for long — still true?** (`fact_decay`) | nobody has said it for the window (30 days) | a project deadline from last month | keep · outdated · changed · wrong · forget |
-| **Corroborated, unconfirmed** (`review`) | your conversations agree with it, but nobody said it is so | a fact of unknown origin | yes · no · outdated · wrong · forget · reject |
-| **An agent stored this, nobody confirmed** (`new_fact`) | an agent wrote it lately on its own conclusion | «Prefers short answers» | yes · no · outdated · wrong · forget · reject |
+| **Corroborated, unconfirmed** (`review`) | your conversations agree with it, but nobody said it is so | a fact of unknown origin | yes · no · outdated · changed · wrong · forget · reject |
+| **An agent stored this, nobody confirmed** (`new_fact`) | an agent wrote it lately on its own conclusion | «Prefers short answers» | yes · no · outdated · changed · wrong · forget · reject |
 | **People keep saying it** (`promotion`) | you said it on different days | you mentioned the same habit three times | yes · no · outdated · forget |
 | **Said again** (`confirm`) | a fact repeated on different days, worth marking confirmed | — | yes · no |
 | **Rejected, still recalled** (`trust_feedback`) | you rejected a fact earlier and it keeps coming up | — | yes (lower its trust) · no |
@@ -305,7 +305,8 @@ Details: [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md).
   never as you; see the next section. Everything else is your answer: it never reads "yes" into silence, never
   carries one answer over to another question.
 - The agent makes only the call `dreamem decide` printed, after checking the store. It never forgets a fact you did
-  not ask to forget. It edits a Claude Code memory note only on your answer, after `dreamem verify` shows it is the
+  not ask to forget. It edits a Claude Code memory note only on your answer (or deletes one that is word for word what
+  is kept, on its own check), after `dreamem verify` shows it is the
   text you were shown, and never edits `CLAUDE.md`, `AGENTS.md` or Codex memories.
 - In a system without versions the check is the exact text: an MCP `memory` observation is deleted only on a
   word-for-word match, and a change adds the new text before it deletes the old (a failure in between leaves both,
@@ -323,16 +324,19 @@ and records its answer with `dreamem decide Q <answer> --verified "<what it chec
 `report.md` show it apart from yours, and the review ends with a summary.
 
 - **It holds** (`keep`, `yes`): nothing is written to memory — it is not your confirmation, and a fact is not voted
-  up at every check. dreamem keeps the digest of the text it checked (`agent-checked.json`, no words) and does not
-  ask about that text for 30 days.
+  up at every check. dreamem keeps a digest of that fact's exact text (for a conflict, with what it was set against)
+  in `agent-checked.json` — no words — and does not ask about it for 30 days. Another text, version or contradiction
+  is asked about. A note's `keep` rests as yours does (the engine's own 14 days).
 - **It moved on** (`changed`, `outdated`): only in a store that keeps the old text (holographic-memory), and only
-  for a fact that is not your own words (`origin` said or confirmed). Its new text is `inferred`, not yours; it is
-  not asked about the next night either.
-- **Duplicates**: a merge only when the second text says nothing the first does not; deleting an MCP `memory`
-  observation or a Claude Code note only when it is the same text as what is kept.
-- **Always yours**: forget, reject, wrong, "people keep saying it" and "said again" (their point is your word),
-  possible new facts, your preferences, decisions, people, family, health and plans, and anything the agent could
-  not confirm beyond doubt. `dreamem` refuses the agent what is yours.
+  for a fact an agent stored (`origin: inferred`) — never one you said or confirmed, nor one of unknown origin
+  (it may be yours from before origins were kept). The origin and version are read again right before the call.
+  Its new text is `inferred`, not yours, and rests too; an ended fact needs no rest.
+- **Duplicates**: only the same text twice (spaces aside, case kept). A retelling — even «A pays B» and «B pays A»,
+  which share every word — is yours to judge. A note is deleted as a copy only while the kept side is as shown.
+- **Always yours**: forget, reject, no, wrong, "people keep saying it" and "said again" (their point is your
+  word), possible new facts, your preferences, decisions, people, family, health and plans, and anything the agent
+  could not confirm beyond doubt. `dreamem` refuses these to an answer given with `--verified`. It cannot tell an
+  agent that leaves the flag out from you: that the agent never does so is the skill's rule, not a lock.
 
 A question counts as answered only once its memory call succeeded: a session that ended in between leaves it to
 come back the next night.

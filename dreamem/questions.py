@@ -61,20 +61,29 @@ AGENT_ANSWERS = {
     "conflict": {"keep", "changed", "outdated"},
     "fact_decay": {"keep", "changed", "outdated"},
     "outcome": {"keep", "changed", "outdated"},
-    "review": {"yes", "changed", "outdated"},
+    "review": {"yes"},  # a fact of unknown origin: nothing tells it is not the person's words (see REWRITES)
     "new_fact": {"yes", "changed", "outdated"},
     "note_decay": {"keep"},
 }
 HOLDS = ("keep", "yes")             # the agent's "it holds": no memory call, a rest in AGENT_FILE
-REWRITES = ("changed", "outdated")  # only in a store that keeps the old text, and never of the person's own words
+# Only in a store that keeps the old text, and only of an agent's own fact (`inferred`): an unknown origin may be the
+# person's words stored before origins were kept. The origin is read again right before the call (review.decide).
+REWRITES = ("changed", "outdated")
 VERIFIED_CHARS = 300
-AGENT_FILE = "agent-checked.json"  # in a profile's state: texts the agent checked (digests, ids, answers — no words)
+AGENT_FILE = "agent-checked.json"  # in a profile's state: texts the agent checked (digests, ids — no words)
 AGENT_REST_DAYS = 30
 RESTING = ("conflict", "fact_decay", "review", "new_fact")  # not outcome: a new report of an answer gone wrong is new
 
 
 def _flat(text) -> str:
-    return " ".join(str(text or "").casefold().split())
+    """The text with its spaces evened out — case and every word kept: `/srv/API` is not `/srv/api`."""
+    return " ".join(str(text or "").split())
+
+
+def same_text(a, b) -> bool:
+    """Whether two texts say exactly the same: the only duplicate the agent removes on its own (a retelling — even
+    "A pays B" and "B pays A", which share every word — is the person's to judge)."""
+    return bool(_flat(a)) and _flat(a) == _flat(b)
 
 
 def _agent_may(q: dict, answer: str, writer) -> None:
@@ -86,16 +95,17 @@ def _agent_may(q: dict, answer: str, writer) -> None:
     if answer in REWRITES:
         if HISTORY not in writer.capabilities:
             raise ValueError(f"{person}: {writer.title or writer.name} keeps no old text")
-        if q.get("origin") in ("said", "confirmed"):
-            raise ValueError(f"{person}: the fact is the person's own words")
-    if section == "duplicate" and answer == "yes" and (q.get("copy") or {}).get("covered") is False:
-        raise ValueError(f"{person}: the second fact has words the first lacks")
-    if answer == "drop-copy" and _flat(q["copy"].get("content")) != _flat(q["keep"].get("content")):
+        if q.get("origin") != "inferred":
+            raise ValueError(f"{person}: the fact may be the person's own words (origin {q.get('origin') or 'unknown'})")
+    if section == "duplicate" and answer == "yes" and not same_text(q["keep"].get("content"),
+                                                                    q["copy"].get("content")):
+        raise ValueError(f"{person}: the two texts are not the same word for word")
+    if answer == "drop-copy" and not same_text(q["copy"].get("content"), q["keep"].get("content")):
         raise ValueError(f"{person}: the two texts are not the same word for word")
     if answer == "drop-note":
         kept = q.get("other_content") if q.get("other") else (q.get("fact") or {}).get("content")
-        if not _flat(q.get("content")) or _flat(q.get("content")) not in _flat(kept):
-            raise ValueError(f"{person}: the note says more than what is kept")
+        if not same_text(q.get("content"), kept):
+            raise ValueError(f"{person}: the note is not the same text as what is kept")
 
 
 def _same_text(item: dict, current) -> bool:
@@ -141,9 +151,10 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
             # judged. Asked about tomorrow, with the text and the version that go together.
             skip("changed_during_pass")
             return
-        if section in RESTING and checked and (
-                engineapi.fingerprint(state["content"]) if (state or {}).get("content") else _seen_key(item)) in checked:
-            skip("agent_checked")  # the review agent checked this very text lately (its own "it holds" or new text)
+        if section in RESTING and checked and rest_key(
+                fid, (state or {}).get("content") or item.get("content"),
+                extra.get("conflicts") if section == "conflict" else None) in checked:
+            skip("agent_checked")  # the agent checked this very text (against this very contradiction) lately
             return
         q = {"section": section, "bucket": BUCKET[section], "seen_key": _seen_key(item), "fact_id": fid,
              "version_id": (state or {}).get("version_id"), "origin": (state or {}).get("origin"),
@@ -379,36 +390,52 @@ def answer_outcomes(state_dir: Path, q: dict, answered: bool) -> None:
     write_json(state_dir / OUTCOMES_FILE, data)
 
 
-def agent_checked(state_dir: Path, days: int = AGENT_REST_DAYS) -> set:
-    """Digests of the texts the review agent checked within *days*: a question about one is not asked again."""
+def rest_key(fact_id, text: str, conflicts=None) -> str:
+    """The key of a rest the review agent earned: the fact, its exact text and — for a conflict — what it was set
+    against. Another version, another text or a new contradiction is another key: asked again."""
+    sides = sorted(str((c or {}).get("entry") or (c or {}).get("content") or "") for c in conflicts or [])
+    raw = "\x00".join([str(fact_id), str(text or ""), *sides])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def _rests(state_dir: Path) -> dict:
     data = read_json(state_dir / AGENT_FILE, {}) or {}
+    return data if isinstance(data, dict) else {}
+
+
+def _fresh(rec, now, days=AGENT_REST_DAYS) -> bool:
+    at = _stamp(rec.get("at")) if isinstance(rec, dict) else None
+    return at is not None and (now - at).days < days
+
+
+def agent_checked(state_dir: Path, days: int = AGENT_REST_DAYS) -> set:
+    """Keys (``rest_key``) of what the review agent checked within *days*: a question about one is not asked."""
     now = datetime.now().astimezone()
-    out = set()
-    for key, rec in (data.items() if isinstance(data, dict) else ()):
-        at = _stamp(rec.get("at")) if isinstance(rec, dict) else None
-        if at is not None and (now - at).days < days:
-            out.add(key)
-    return out
+    return {k for k, rec in _rests(state_dir).items() if _fresh(rec, now, days)}
 
 
 def note_agent_check(state_dir: Path, q: dict, on: bool) -> None:
-    """Record (``on``: its answer is settled) or drop (undo) the review agent's own answer about a fact: the digest of
-    the text the fact holds after it, the fact, the question, the answer and when — never the words or the check
-    (they may quote the fact). It is also the trace of what the agent closed, after the night is replaced."""
-    if q.get("by") != AGENT or q.get("section") not in AGENT_ANSWERS or q.get("fact_id") is None:
+    """Record (``on``: its answer is settled) or drop (undo, failed) the rest of the review agent's own answer about a
+    fact: its "it holds" or the new text it gave — not an "outdated" (the fact no longer holds: nothing to ask). The
+    key and the fact's id only, never the words or the check (they may quote the fact); rests past their days go."""
+    if q.get("by") != AGENT or q.get("section") not in RESTING or q.get("fact_id") is None:
         return
-    path = state_dir / AGENT_FILE
-    data = read_json(path, {}) or {}
-    data = data if isinstance(data, dict) else {}
-    for key in [k for k, rec in data.items() if isinstance(rec, dict) and rec.get("qid") == q.get("qid")]:
-        data.pop(key)
-    if on:
-        text = q.get("text") if q.get("answer") == "changed" else q.get("content")
-        if not text:
-            return
-        data[engineapi.fingerprint(text)] = {"fact_id": q["fact_id"], "qid": q["qid"], "answer": q.get("answer"),
-                                             "at": datetime.now().astimezone().isoformat(timespec="seconds")}
-    write_json(path, data)
+    now = datetime.now().astimezone()
+    data = {k: rec for k, rec in _rests(state_dir).items() if _fresh(rec, now) and rec.get("qid") != q.get("qid")}
+    text = q.get("text") if q.get("answer") == "changed" else q.get("content") if q.get("answer") in HOLDS else None
+    if on and text:
+        data[rest_key(q["fact_id"], text, q.get("conflicts") if q.get("section") == "conflict" else None)] = {
+            "fact_id": q["fact_id"], "qid": q["qid"], "at": now.isoformat(timespec="seconds")}
+    write_json(state_dir / AGENT_FILE, data)
+
+
+def drop_rests(state_dir: Path, fact_ids: set) -> int:
+    """After a forget: the rests of the forgotten facts go too (their key is a digest of the text). How many."""
+    data = _rests(state_dir)
+    keep = {k: rec for k, rec in data.items() if not (isinstance(rec, dict) and rec.get("fact_id") in fact_ids)}
+    if len(keep) != len(data):
+        write_json(state_dir / AGENT_FILE, keep)
+    return len(data) - len(keep)
 
 
 def settled(q: dict) -> bool:
@@ -436,6 +463,9 @@ def reopen_undecided(state_dir: Path, previous: dict | None) -> dict:
     asked = read_json(asked_path, {}) or {}
     published = _stamp((previous or {}).get("generated_at"))
     decided = [q for q in (previous or {}).get("questions") or [] if settled(q)]
+    for q in (previous or {}).get("questions") or []:
+        if q.get("section") == "outcome" and q.get("status") in CLOSED and not settled(q):
+            answer_outcomes(state_dir, q, False)  # decided under 0.8, its call never made: the reports stay open
     keep_seen = {(q.get("bucket"), q.get("seen_key")) for q in decided if q.get("seen_key")}
     keep_pairs = {q.get("proposal") for q in decided if q.get("section") == "duplicate"}
     keep_asked = {q.get("entry_key") for q in decided if q.get("section") == "note_decay"}

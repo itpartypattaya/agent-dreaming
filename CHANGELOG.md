@@ -10,17 +10,21 @@ was done and merged"). On the night of 25.11 this was done by hand, and showed w
   path, a config, what you said in a session, a duplicate that adds nothing. `dreamem list` and `report.md` show
   these apart from your answers, with what was checked; the review ends with a summary.
 - It is never recorded as yours. Its "it holds" (`keep`, `yes`) writes nothing to memory: before, the only way was
-  `memory_feedback confirmed`, which says you agreed. dreamem keeps the digest of the checked text (no words) and
-  does not ask about it for 30 days. A new text it gives is `origin: inferred`, and is not asked about the next night
-  as "an agent stored this".
+  `memory_feedback confirmed`, which says you agreed. dreamem keeps a digest of that fact's exact text (for a
+  conflict, with what it was set against; no words) and does not ask about it for 30 days. A new text it gives is
+  `origin: inferred`, and is not asked about the next night as "an agent stored this".
 - dreamem refuses the agent what is yours: forget, reject, no, wrong, "people keep saying it", "said again", possible
-  new facts; ending or rewriting a fact you said or confirmed; a rewrite or delete where no old text is kept (MCP
-  `memory`, Claude Code notes); a merge whose second text says more than the first.
+  new facts; ending or rewriting a fact that is not an agent's own (`inferred` — read again right before the call,
+  so a confirmation since the night counts); a rewrite or delete where no old text is kept (MCP `memory`, Claude
+  Code notes); a duplicate that is not the same text twice.
 - "An agent stored this lately" and "corroborated — confirm?" take **changed**: a version moved on. Before, only
   **wrong** took a new text, and on 25.11 the agent called `memory_change` past dreamem.
 - A question counts as answered only once its memory call succeeded. A recorded answer whose call was never made (the
   session ended) rested as answered for 14 days, and an "answer went wrong" report whose call was refused never came
-  back; both come back now.
+  back (also one decided under 0.8); both come back now. `report.md` lists such answers apart, as waiting.
+- A forgotten fact leaves an answered question too, with what the agent wrote about its check, and its rests.
+
+The plan and the code were reviewed by Codex (gpt-6.2-sol) and Fable 5.2; their findings are in this release.
 
 ## 0.8.5 — 2026-11-24
 

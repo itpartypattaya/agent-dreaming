@@ -113,8 +113,10 @@ def show(homes: Homes, *, profile: str | None = None, as_json: bool = False, inc
             visible = []
             for q in doc["questions"]:
                 if gone & questions.fact_ids(q):
-                    if q["status"] in questions.OPEN:
-                        q["status"], q["failure"] = questions.FAILED, "forgotten"
+                    if q.get("failure") != "forgotten":  # an answered one too: its account of a check may quote it
+                        if q["status"] in questions.OPEN:
+                            q["status"] = questions.FAILED
+                        q["failure"] = "forgotten"
                         for k in questions.FACT_WORDS:
                             q.pop(k, None)
                         q["content"] = None
@@ -174,6 +176,29 @@ def show(homes: Homes, *, profile: str | None = None, as_json: bool = False, inc
         return 0
 
 
+def _agent_stale(homes: Homes, name: str, q: dict, answer: str) -> str | None:
+    """What changed since the night that the agent's answer stands on, or None. A rewrite reads the fact again: the
+    person may have confirmed it since (its version stays, its origin does not), and the agent may rewrite only its
+    own `inferred` fact. A note dropped as a copy needs the kept side as it was shown too."""
+    state_dir = homes.profile(name) / "state"
+    if answer in questions.REWRITES and q.get("fact_id") is not None:
+        now = providers.for_question(q, state_dir).heads([q["fact_id"]]).get(int(q["fact_id"]))
+        if not now or now.get("version_id") != q.get("version_id"):
+            return f"fact #{q['fact_id']} changed"
+        q["origin"] = now.get("origin")  # what _agent_may judges by
+    if answer == "drop-note" and q.get("section") == "note_duplicate":
+        if q.get("other"):
+            if notes.file_sha256(q["other"].get("path") or "") != q["other"].get("sha256"):
+                return f"the note '{q['other'].get('name')}' changed"
+        elif q.get("fact"):
+            fid = q["fact"].get("fact_id")
+            writer = providers.get(q.get("provider"), q.get("store"), state_dir)
+            now = writer.heads([fid]).get(int(fid)) if fid is not None else None
+            if not now or now.get("status") not in (None, "current") or now.get("content") != q["fact"].get("content"):
+                return f"fact #{fid} changed"
+    return None
+
+
 def decide(homes: Homes, qid: str, answer: str, *, text: str | None = None, profile: str | None = None,
            entity: str | None = None, verified: str | None = None, out=print) -> int:
     with Lock(homes.lock, wait=10):
@@ -210,6 +235,13 @@ def decide(homes: Homes, qid: str, answer: str, *, text: str | None = None, prof
                 questions.failed(q, "changed_since")
                 _save(homes, name, doc)
                 out("error: an observation changed or is gone; nothing was recorded")
+                return 1
+        if verified is not None and q.get("status") not in questions.CLOSED:
+            stale = _agent_stale(homes, name, q, answer.strip().lower())
+            if stale:
+                questions.failed(q, "changed_since")
+                _save(homes, name, doc)
+                out(f"error: {stale} since the night; nothing was recorded — the question comes back as it is now")
                 return 1
         try:
             todo = questions.decide(q, answer, text, by_agent=verified)
@@ -276,6 +308,7 @@ def mark(homes: Homes, qid: str, what: str, *, detail: str | None = None, profil
                 # The memory still holds what it held: an outcome's reports are not answered (before 0.9.0 they
                 # stayed answered, and the question never came back).
                 questions.answer_outcomes(homes.profile(name) / "state", q, False)
+                questions.note_agent_check(homes.profile(name) / "state", q, False)
                 questions.failed(q, detail or "failed")
                 if q.get("section") == "duplicate" and q.get("proposal"):
                     engineapi.close_proposal(homes.profile(name) / "state", q["proposal"], "stale")
