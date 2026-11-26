@@ -79,6 +79,7 @@ def test_reject_puts_the_fact_on_the_core_reject_list(world):
     fid = world.fact(FRIDAY, origin="inferred", days_old=2)
     q = night(world)["questions"][0]
     lines = []
+    world.reply("никогда не спрашивай об этом")  # the person said it (0.9.1: the next night looks)
     assert review.decide(world.homes, q["qid"], "reject", out=lines.append) == 0
     # "never ask again" also stops recall offering it: the answer hands the agent that one call
     assert json.loads(lines[0])["call"] == {"tool": "memory_feedback", "args": {

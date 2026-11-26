@@ -167,6 +167,12 @@ class World:
         path.write_bytes(body + raw_tail)
         return path
 
+    def reply(self, text="да", *, session="review"):
+        """The person's answer in a review, typed just now — what stands behind an answer recorded as theirs (0.9.1:
+        the next night looks for it)."""
+        import time
+        return self.claude_file([self.claude_line(text, ts=time.time() - 5, session=session)], session=session)
+
     def say(self, texts_by_day: dict, *, session="talk"):
         """Human lines in Claude Code: {days_ago: [text, …]}."""
         lines = []

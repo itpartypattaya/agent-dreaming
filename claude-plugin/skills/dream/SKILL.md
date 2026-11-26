@@ -22,7 +22,7 @@ carry out exactly their answers, then tell them in a few lines what was done.
    `--verified "<what you checked, a few plain words>"` — name the source, never quote a fact's text there, and
    never record your answer as theirs. `dreamem` refuses what only the person may answer (forget, reject, no, wrong,
    a promotion, a confirmation, a rewrite or delete a store cannot give back, a merge that would drop what only
-   the second fact says): ask them. A technical fact is yours to correct whoever stored it — the person's own
+   the second fact says, anything about a fact stored as their preference): ask them. A technical fact is yours to correct whoever stored it — the person's own
    words too — when the check gave a clear answer; a personal one never is. Never infer "yes" from silence, never
    carry one answer over to another question. "Not now" is a fine answer (`later`).
 3. **One question at a time** to the person, in their language, with the texts exactly as shown (never shorten a
@@ -44,6 +44,11 @@ carry out exactly their answers, then tell them in a few lines what was done.
    is yours when you compared both texts and found no contradiction (the same people in the same roles, numbers,
    dates, places; nothing negated); say in `--verified` why they are one. When the second says more, merge with
    `--text` holding both. Any doubt: the person's. Then, for each question left, ask the person plainly. Sections and the answers each takes:
+   - `unbacked` — an answer recorded as the person's, with no message of theirs read in the 20 minutes before it:
+     only they answer it (asked first). **mine** / **not-mine**. On not-mine show them what that answer did
+     (`memory_history` of the fact) and make the printed call if there is one (`memory_revert`: it undoes the
+     fact's last change, so check in the history that the last one is that answer's — otherwise `dreamem
+     failed` and tell them); with no call, say plainly that it cannot be undone by a call.
    - `duplicate` [D-n] — two facts look like one: **yes** (merge; with `--text`, the text that keeps both is then
      set on the fact that stays — two calls) / **not-duplicates**.
    - `external_duplicate` — two MCP observations look alike: **drop-copy** deletes the second observation only,

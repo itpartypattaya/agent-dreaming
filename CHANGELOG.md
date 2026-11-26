@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.1 — 2026-11-27
+
+Two guards around the review agent's own answers (Anton, after 0.9.0: which facts are technical was the skill's word
+alone, and an agent leaving `--verified` out was taken for the person).
+
+- A fact holographic-memory keeps as the person's preference (category `user_pref`) is never the agent's to close:
+  not "it holds", not a correction, not a merge — read from the store right before, whatever the agent calls
+  technical. The person answers it as before.
+- An answer recorded as the person's is checked the next night: no message of theirs read in the 20 minutes before
+  it → the first question of the review, "was this your answer?" (**mine** / **not-mine**). not-mine undoes a change
+  or a correction it made (`memory_revert`); a confirmation or a merge has no undo call, and the review says so.
+  Only answers that reached memory are checked, not while the sessions were read only in part, and an open check
+  is carried to the next night. dreamem still writes nothing outside `~/.dreaming`.
+
 ## 0.9.0 — 2026-11-26
 
 The review agent closes the questions a check settles, and asks you only the rest (Anton: "a technical question you

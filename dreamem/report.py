@@ -7,6 +7,7 @@ from datetime import datetime
 from .questions import CLOSED, DEFERRED, OPEN, settled
 
 SECTION_TITLE = {
+    "unbacked": "recorded as the person's, but no message of theirs was read near it — was it their answer?",
     "duplicate": "look like one fact — merge?",
     "external_duplicate": "observations look alike — drop the second or keep both?",
     "conflict": "conflicts with what memory says",
@@ -44,6 +45,11 @@ def question_text(q: dict) -> str:
         return line
     if s == "external_duplicate":
         return f"{q['qid']} {_q(q['keep']['content'], 2000)} and {_q(q['copy']['content'], 2000)} — {SECTION_TITLE[s]}"
+    if s == "unbacked":
+        a = q.get("about") or {}
+        fact = f", fact #{q['fact_id']}" if q.get("fact_id") is not None else ""
+        return (f"{q['qid']} the answer '{a.get('answer')}' to {a.get('qid')} ({a.get('section')}{fact}) on "
+                f"{local_time(a.get('decided_at'))} — {SECTION_TITLE[s]}")
     if s == "new_candidate":  # no words here: the review reads the clause again from the session file
         return f"{q['qid']} said on {q.get('days', 1)} day(s) — {SECTION_TITLE[s]} (shown in the review)"
     if s == "note_duplicate":
@@ -164,7 +170,7 @@ def summary_line(entries: dict) -> str | None:
     if not total:
         return None
     parts = []
-    for name, keys in (("duplicate", ("duplicate", "external_duplicate")),
+    for name, keys in (("recorded answer", ("unbacked",)), ("duplicate", ("duplicate", "external_duplicate")),
                        ("fact", ("conflict", "outcome", "fact_decay", "review", "new_fact", "promotion", "confirm", "trust_feedback")),
                        ("note", ("note_decay", "note_duplicate")), ("possible new fact", ("new_candidate",))):
         n = sum(kinds.get(k, 0) for k in keys)

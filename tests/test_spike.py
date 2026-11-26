@@ -103,6 +103,7 @@ def test_only_answered_questions_rest(world):
     by = {(q["section"], q.get("fact_id") or q["note"]["name"]): q["qid"] for q in first["questions"]}
     fact_q = next(v for (s, k), v in by.items() if s == "new_fact")
     note_q = by[("note_decay", "deploy")]
+    world.reply("да, и заметку оставь")  # the person said both (0.9.1: the next night looks)
     review.decide(world.homes, fact_q, "yes", out=lambda *_: None)
     review.mark(world.homes, fact_q, "applied", out=lambda *_: None)  # 0.9.0: a call rests once it was made
     review.decide(world.homes, note_q, "keep", out=lambda *_: None)  # needs no call: rests at once
@@ -308,6 +309,7 @@ def test_a_fact_the_person_corrected_is_not_asked_again_as_an_agents(world):
     q = next(q for q in night(world)["questions"] if q["fact_id"] == fid)
     assert q["section"] == "new_fact"
     printed = []
+    world.reply("неверно, в десять")  # the person said it (0.9.1: the next night looks)
     review.decide(world.homes, q["qid"], "wrong", text="Магазин закрывается в десять вечера по пятницам",
                   out=printed.append)
     args = json.loads(printed[0])["call"]["args"]

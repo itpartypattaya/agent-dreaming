@@ -37,7 +37,7 @@ OPEN = (GENERATED, SHOWN, FAILED, DEFERRED)
 CLOSED = (DECIDED, APPLIED)
 
 # Asked first: what may be wrong in memory now, then what may be missing, then the notes.
-ORDER = ("duplicate", "external_duplicate", "conflict", "outcome", "fact_decay", "review", "new_fact", "promotion", "confirm", "trust_feedback",
+ORDER = ("unbacked", "duplicate", "external_duplicate", "conflict", "outcome", "fact_decay", "review", "new_fact", "promotion", "confirm", "trust_feedback",
          "note_duplicate", "note_decay", "new_candidate")
 NOTE_KEYS = ("id", "project", "path", "name", "sha256")
 BUCKET = {"duplicate": "duplicate_pairs", "conflict": "conflicts", "fact_decay": "fact_decays", "review": "promotions",
@@ -130,7 +130,7 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
           answered: set | None = None, rejected: set | None = None,
           candidates: list[dict] | None = None, provider=None, note_pairs: list[dict] | None = None,
           notes: list | None = None, external_pairs: list[dict] | None = None,
-          checked: set | None = None) -> tuple[list[dict], dict]:
+          checked: set | None = None, unbacked: list[dict] | None = None) -> tuple[list[dict], dict]:
     # Question ids carry the night: an answer meant for "Q1" of one night never lands on "Q1" of the next. The tag is
     # the caller's (unique per published night; two nights may share a `generated_at` second).
     night = night_tag or hashlib.sha1(str(result.get("generated_at") or "").encode("utf-8")).hexdigest()[:4]
@@ -246,6 +246,9 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
             note = note_of(q.get("conflicts") or [], notes)
             if note is not None:
                 q["note"] = {k: getattr(note, k) for k in NOTE_KEYS}
+    for item in unbacked or []:  # an answer recorded as the person's with no message of theirs near it
+        qs.append({"section": "unbacked", "bucket": None, "seen_key": None, "fact_id": item.get("fact_id"),
+                   "about": item["about"], "store": store})
     for item in candidates or []:  # references and digests only: the review reads the words again
         qs.append({"section": "new_candidate", "bucket": None, "seen_key": None, "ref": item["ref"],
                    "clause": item["clause"], "days": item["days"], "store": store})
@@ -263,7 +266,7 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
         if q["section"] == "new_candidate":
             q["status"] = GENERATED  # outside max_questions: the agent asks about one at most
             continue
-        fid = q.get("fact_id")
+        fid = q.get("fact_id") if q["section"] != "unbacked" else None  # it holds no other question back
         if fid is not None and fid in first_of:
             q["status"], q["same_fact_as"] = DEFERRED, first_of[fid]
             skipped["same_fact"] = skipped.get("same_fact", 0) + 1
@@ -502,6 +505,55 @@ def reopen_undecided(state_dir: Path, previous: dict | None) -> dict:
     return out
 
 
+UNBACKED_WINDOW = 20 * 60  # seconds before an answer in which the person's own message is looked for
+
+
+def _not_mine(q: dict, text: str | None):
+    """"Not my answer": a change or a correction it made is undone (holographic-memory's memory_revert undoes the
+    fact's last one — the agent shows its history first); anything else cannot be undone by a call."""
+    about = q.get("about") or {}
+    if about.get("answer") in ("changed", "wrong") and q.get("fact_id") is not None and \
+            (q.get("provider") or providers.DEFAULT) == providers.DEFAULT:
+        return {"tool": "memory_revert", "args": {"fact_id": q["fact_id"]}}
+    return NOTHING
+
+
+UNBACKED = {"mine": NOTHING, "not-mine": _not_mine}  # only the person answers (not in AGENT_ANSWERS)
+
+
+def unbacked_answers(previous: dict | None, times: list[float], sessions_complete: bool) -> tuple[list[dict], int]:
+    """Answers of the last night recorded as the person's (``by: person``) with no message of the person's read
+    within UNBACKED_WINDOW before them — dreamem cannot tell the person from the agent when an answer is recorded,
+    so it looks afterwards (0.9.1). Open checks of that night are carried on. Returns the items and how many answers
+    were not checked because the sessions were read only in part (a message may be in what was not read)."""
+    import bisect
+
+    items, held = [], 0
+    stamps = sorted(times)
+    for q in (previous or {}).get("questions") or []:
+        if q.get("section") == "unbacked":
+            if q.get("status") in OPEN:
+                items.append({"about": q["about"], "fact_id": q.get("fact_id")})
+            continue
+        if q.get("by") != PERSON or not settled(q):  # a call never made changed nothing: it comes back anyway
+            continue
+        at = _stamp(q.get("decided_at"))
+        if at is None:
+            continue
+        if not sessions_complete:
+            held += 1
+            continue
+        t = at.timestamp()
+        i = bisect.bisect_left(stamps, t - UNBACKED_WINDOW)
+        if i < len(stamps) and stamps[i] <= t + 60:
+            continue  # the person wrote just before (or as) it was recorded
+        ids = sorted(fact_ids(q))
+        items.append({"fact_id": (q.get("keep") or {}).get("fact_id") or (ids[0] if ids else None),
+                      "about": {"qid": q["qid"], "night": previous.get("generated_at"), "section": q.get("section"),
+                                "answer": q.get("answer"), "decided_at": q.get("decided_at")}})
+    return items, held
+
+
 def acks_for(state_dir: Path, previous: dict | None) -> dict | None:
     """{generated_at: [answer]} for the engine, or None: only for the night the engine last published (its
     ``_pending``) and only when a person decided at least one of its questions."""
@@ -537,6 +589,8 @@ def find(doc: dict, qid: str) -> dict:
 
 
 def answers(q: dict) -> dict:
+    if q.get("section") == "unbacked":
+        return UNBACKED
     """{answer: action} a question takes: what its store can carry out (``later`` is always taken too)."""
     return providers.for_question(q).answers(q["section"])
 
@@ -558,7 +612,7 @@ def decide(q: dict, answer: str, text: str | None = None, by_agent: str | None =
         q["status"], q["answer"] = SHOWN, None
         return {}
     writer = providers.for_question(q)
-    table = writer.answers(q["section"])
+    table = UNBACKED if q.get("section") == "unbacked" else writer.answers(q["section"])
     if answer not in table:
         raise ValueError(f"{q['qid']} ({q['section']}) takes: {', '.join([*table, LATER])}")
     if q.get("status") in CLOSED:

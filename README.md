@@ -340,8 +340,15 @@ and records its answer with `dreamem decide Q <answer> --verified "<what it chec
   same text, and only while the kept side is as shown.
 - **Always yours**: forget, reject, no, wrong, "people keep saying it" and "said again" (their point is your
   word), possible new facts, your preferences, decisions, people, family, health and plans, and anything the agent
-  could not confirm beyond doubt. `dreamem` refuses these to an answer given with `--verified`. It cannot tell an
-  agent that leaves the flag out from you: that the agent never does so is the skill's rule, not a lock.
+  could not confirm beyond doubt. `dreamem` refuses these to an answer given with `--verified`, and any answer of
+  the agent's about a fact holographic-memory keeps as your preference (category `user_pref`), read right before.
+- **An answer recorded as yours is checked the next night.** When it is recorded, dreamem cannot tell you from
+  the agent (both run the same command). So the next pass looks for a message of yours in the 20 minutes before
+  each answer recorded as yours that reached memory; none → the first question of the next review: "the answer
+  'yes' to Q3 on … was recorded as yours — was it?" **mine** closes it; **not-mine** undoes a change or a
+  correction it made (`memory_revert`) and says when nothing can be undone (a confirmation, a merge). Not
+  checked while the sessions were read only in part; an answer you gave where no session is read (voice, another
+  app) is asked about too.
 
 A question counts as answered only once its memory call succeeded: a session that ended in between leaves it to
 come back the next night.
