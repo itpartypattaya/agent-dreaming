@@ -118,8 +118,14 @@ def render(doc: dict) -> str:
     else:
         lines.append("No questions tonight.")
     done = [q for q in qs if q["status"] in CLOSED]
-    if done:
-        lines += ["", f"Answered: {', '.join(q['qid'] + ' ' + str(q['answer']) for q in done)}."]
+    said = [q for q in done if q.get("by") != "agent"]
+    checked = [q for q in done if q.get("by") == "agent"]
+    if said:
+        lines += ["", f"Answered: {', '.join(q['qid'] + ' ' + str(q['answer']) for q in said)}."]
+    if checked:
+        lines += ["", "Closed by the agent on its own check:"]
+        lines += [f"- {q['qid']} {q['answer']}" + (f" — {q['verified']}" if q.get("verified") else "")
+                  for q in checked]
     notes = []
     if doc.get("store_coverage"):
         notes.append(f"- the store was read only in part ({', '.join(doc['store_coverage'].get('problems') or [])}): "

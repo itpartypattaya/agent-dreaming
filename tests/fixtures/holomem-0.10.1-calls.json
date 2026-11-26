@@ -486,6 +486,48 @@
    }
   }
  },
+ "new_fact/changed": {
+  "answer": "changed",
+  "call": {
+   "args": {
+    "content": "new text",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7,
+    "origin": "said"
+   },
+   "tool": "memory_change"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "content": "new text",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7,
+     "origin": "said"
+    },
+    "tool": "memory_change"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   },
+   "fallback": {
+    "args": {
+     "content": "new text",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_change"
+   }
+  }
+ },
  "new_fact/forget": {
   "answer": "forget",
   "call": {
@@ -980,6 +1022,48 @@
    },
    "check": {
     "database": "C:/holo/memory_store.db"
+   }
+  }
+ },
+ "review/changed": {
+  "answer": "changed",
+  "call": {
+   "args": {
+    "content": "new text",
+    "expect": {
+     "7": 12
+    },
+    "fact_id": 7,
+    "origin": "said"
+   },
+   "tool": "memory_change"
+  },
+  "status": "decided",
+  "text": "new text",
+  "todo": {
+   "call": {
+    "args": {
+     "content": "new text",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7,
+     "origin": "said"
+    },
+    "tool": "memory_change"
+   },
+   "check": {
+    "database": "C:/holo/memory_store.db"
+   },
+   "fallback": {
+    "args": {
+     "content": "new text",
+     "expect": {
+      "7": 12
+     },
+     "fact_id": 7
+    },
+    "tool": "memory_change"
    }
   }
  },

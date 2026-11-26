@@ -14,6 +14,11 @@ The engine's cooldowns follow the answers, not the showing:
 
 An answer never changes memory by itself: it says which memory tool call the agent makes (and what it must check
 first). Only ``reject`` and ``not-duplicates`` write — the engine's reject list and proposals, in the profile's state.
+
+An answer is the person's, or the review agent's own (0.9.0, ``by_agent``: what it checked). The agent may close only
+what a check can settle and a store can undo (``AGENT_ANSWERS``); its "it holds" writes nothing to memory — it is not
+the person's confirmation — and rests the text in ``agent-checked.json`` instead. A question counts as answered for the
+engine's rests only once its call succeeded (``settled``).
 """
 from __future__ import annotations
 
@@ -23,7 +28,7 @@ from pathlib import Path
 
 from . import engineapi, providers
 from .providers import holographic
-from .providers.base import NOT_DUPLICATES, NOTHING, REJECT
+from .providers.base import HISTORY, NOT_DUPLICATES, NOTHING, REJECT
 from .fsutil import read_json, write_json
 
 GENERATED, SHOWN, DECIDED, APPLIED, FAILED, DEFERRED = "generated", "shown", "decided", "applied", "failed", "deferred"
@@ -43,6 +48,54 @@ BUCKET = {"duplicate": "duplicate_pairs", "conflict": "conflicts", "fact_decay":
 # table, the reference, is kept here under its old name.
 ANSWERS = holographic.ANSWERS
 LATER = "later"  # any section: not now, ask again tomorrow
+
+PERSON, AGENT = "person", "agent"  # who answered (``by``); a question decided before 0.9.0 names nobody
+# What the review agent may close on its own check (Anton, 26.11.2026: versions, paths, configs, the state of code and
+# servers, what a transcript says, two facts that say the same — the agent checks and closes; the rest is the
+# person's). Never: forget, reject, no, wrong (a correction leaves no past), a promotion or a confirmation (their
+# point is the person's word), a new candidate (judged as before), a note's deletion or a rewrite of one.
+AGENT_ANSWERS = {
+    "duplicate": {"yes", "not-duplicates"},
+    "external_duplicate": {"drop-copy", "keep-both"},
+    "note_duplicate": {"drop-note", "keep-both"},
+    "conflict": {"keep", "changed", "outdated"},
+    "fact_decay": {"keep", "changed", "outdated"},
+    "outcome": {"keep", "changed", "outdated"},
+    "review": {"yes", "changed", "outdated"},
+    "new_fact": {"yes", "changed", "outdated"},
+    "note_decay": {"keep"},
+}
+HOLDS = ("keep", "yes")             # the agent's "it holds": no memory call, a rest in AGENT_FILE
+REWRITES = ("changed", "outdated")  # only in a store that keeps the old text, and never of the person's own words
+VERIFIED_CHARS = 300
+AGENT_FILE = "agent-checked.json"  # in a profile's state: texts the agent checked (digests, ids, answers — no words)
+AGENT_REST_DAYS = 30
+RESTING = ("conflict", "fact_decay", "review", "new_fact")  # not outcome: a new report of an answer gone wrong is new
+
+
+def _flat(text) -> str:
+    return " ".join(str(text or "").casefold().split())
+
+
+def _agent_may(q: dict, answer: str, writer) -> None:
+    """Raise unless the review agent may give *answer* to *q* on its own check."""
+    section = q.get("section")
+    person = f"{q.get('qid')}: only the person can answer {section} with '{answer}'"
+    if answer not in AGENT_ANSWERS.get(section, ()):
+        raise ValueError(person)
+    if answer in REWRITES:
+        if HISTORY not in writer.capabilities:
+            raise ValueError(f"{person}: {writer.title or writer.name} keeps no old text")
+        if q.get("origin") in ("said", "confirmed"):
+            raise ValueError(f"{person}: the fact is the person's own words")
+    if section == "duplicate" and answer == "yes" and (q.get("copy") or {}).get("covered") is False:
+        raise ValueError(f"{person}: the second fact has words the first lacks")
+    if answer == "drop-copy" and _flat(q["copy"].get("content")) != _flat(q["keep"].get("content")):
+        raise ValueError(f"{person}: the two texts are not the same word for word")
+    if answer == "drop-note":
+        kept = q.get("other_content") if q.get("other") else (q.get("fact") or {}).get("content")
+        if not _flat(q.get("content")) or _flat(q.get("content")) not in _flat(kept):
+            raise ValueError(f"{person}: the note says more than what is kept")
 
 
 def _same_text(item: dict, current) -> bool:
@@ -64,7 +117,8 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
           max_questions: int, profile: str, night_tag: str | None = None, went_wrong: list[dict] | None = None,
           answered: set | None = None, rejected: set | None = None,
           candidates: list[dict] | None = None, provider=None, note_pairs: list[dict] | None = None,
-          notes: list | None = None, external_pairs: list[dict] | None = None) -> tuple[list[dict], dict]:
+          notes: list | None = None, external_pairs: list[dict] | None = None,
+          checked: set | None = None) -> tuple[list[dict], dict]:
     # Question ids carry the night: an answer meant for "Q1" of one night never lands on "Q1" of the next. The tag is
     # the caller's (unique per published night; two nights may share a `generated_at` second).
     night = night_tag or hashlib.sha1(str(result.get("generated_at") or "").encode("utf-8")).hexdigest()[:4]
@@ -86,6 +140,10 @@ def build(result: dict, *, store: str | None, facts: dict, notes_index: dict, co
             # Changed by another session while the night ran: the version read now is not the text the night
             # judged. Asked about tomorrow, with the text and the version that go together.
             skip("changed_during_pass")
+            return
+        if section in RESTING and checked and (
+                engineapi.fingerprint(state["content"]) if (state or {}).get("content") else _seen_key(item)) in checked:
+            skip("agent_checked")  # the review agent checked this very text lately (its own "it holds" or new text)
             return
         q = {"section": section, "bucket": BUCKET[section], "seen_key": _seen_key(item), "fact_id": fid,
              "version_id": (state or {}).get("version_id"), "origin": (state or {}).get("origin"),
@@ -321,6 +379,44 @@ def answer_outcomes(state_dir: Path, q: dict, answered: bool) -> None:
     write_json(state_dir / OUTCOMES_FILE, data)
 
 
+def agent_checked(state_dir: Path, days: int = AGENT_REST_DAYS) -> set:
+    """Digests of the texts the review agent checked within *days*: a question about one is not asked again."""
+    data = read_json(state_dir / AGENT_FILE, {}) or {}
+    now = datetime.now().astimezone()
+    out = set()
+    for key, rec in (data.items() if isinstance(data, dict) else ()):
+        at = _stamp(rec.get("at")) if isinstance(rec, dict) else None
+        if at is not None and (now - at).days < days:
+            out.add(key)
+    return out
+
+
+def note_agent_check(state_dir: Path, q: dict, on: bool) -> None:
+    """Record (``on``: its answer is settled) or drop (undo) the review agent's own answer about a fact: the digest of
+    the text the fact holds after it, the fact, the question, the answer and when — never the words or the check
+    (they may quote the fact). It is also the trace of what the agent closed, after the night is replaced."""
+    if q.get("by") != AGENT or q.get("section") not in AGENT_ANSWERS or q.get("fact_id") is None:
+        return
+    path = state_dir / AGENT_FILE
+    data = read_json(path, {}) or {}
+    data = data if isinstance(data, dict) else {}
+    for key in [k for k, rec in data.items() if isinstance(rec, dict) and rec.get("qid") == q.get("qid")]:
+        data.pop(key)
+    if on:
+        text = q.get("text") if q.get("answer") == "changed" else q.get("content")
+        if not text:
+            return
+        data[engineapi.fingerprint(text)] = {"fact_id": q["fact_id"], "qid": q["qid"], "answer": q.get("answer"),
+                                             "at": datetime.now().astimezone().isoformat(timespec="seconds")}
+    write_json(path, data)
+
+
+def settled(q: dict) -> bool:
+    """Answered for good: its memory call succeeded, or it needed none. A decided call that was never made (the
+    session ended, the store refused) is not: its question comes back."""
+    return q.get("status") == APPLIED or (q.get("status") == DECIDED and not to_apply(q))
+
+
 def _stamp(value):
     try:
         when = datetime.fromisoformat(str(value))
@@ -339,7 +435,7 @@ def reopen_undecided(state_dir: Path, previous: dict | None) -> dict:
     seen = read_json(seen_path, {}) or {}
     asked = read_json(asked_path, {}) or {}
     published = _stamp((previous or {}).get("generated_at"))
-    decided = [q for q in (previous or {}).get("questions") or [] if q.get("status") in CLOSED]
+    decided = [q for q in (previous or {}).get("questions") or [] if settled(q)]
     keep_seen = {(q.get("bucket"), q.get("seen_key")) for q in decided if q.get("seen_key")}
     keep_pairs = {q.get("proposal") for q in decided if q.get("section") == "duplicate"}
     keep_asked = {q.get("entry_key") for q in decided if q.get("section") == "note_decay"}
@@ -379,12 +475,14 @@ def acks_for(state_dir: Path, previous: dict | None) -> dict | None:
     generated = previous.get("generated_at")
     if not generated or pending.get("generated_at") != generated:
         return None
-    decided = [q for q in previous.get("questions") or [] if q.get("status") in CLOSED]
+    decided = [q for q in previous.get("questions") or [] if settled(q)]
     if not decided:
         return None
-    parts = [f"{q['qid']} {q.get('answer')}" for q in decided]
     named = [q["proposal"] for q in decided if q.get("section") == "duplicate"]
-    answer = "Answered by the person: " + ", ".join(parts) + "."
+    said = [f"{q['qid']} {q.get('answer')}" for q in decided if q.get("by") != AGENT]
+    checked = [f"{q['qid']} {q.get('answer')}" for q in decided if q.get("by") == AGENT]
+    answer = " ".join(f"{head}: {', '.join(parts)}." for head, parts in
+                      (("Answered by the person", said), ("Closed by the agent on its own check", checked)) if parts)
     if named:
         answer += " Merge proposals answered: " + ", ".join(named) + "."
     return {generated: [answer]}
@@ -407,11 +505,14 @@ def answers(q: dict) -> dict:
     return providers.for_question(q).answers(q["section"])
 
 
-def decide(q: dict, answer: str, text: str | None = None) -> dict:
+def decide(q: dict, answer: str, text: str | None = None, by_agent: str | None = None) -> dict:
     """Record the person's *answer*; returns what to do: ``{"call": {...}, "check": {...}}`` for a memory tool call
     (``"calls"``: several, in that order; ``"edit"``: a change of a file the agent makes; ``"fallback"``: the same call
     for an older store that refuses an argument it does not know), ``{"local": "reject" |
-    "not-duplicates"}`` for the engine's reject list, ``{}`` when nothing is to be done."""
+    "not-duplicates"}`` for the engine's reject list, ``{}`` when nothing is to be done.
+
+    *by_agent*: the review agent answers itself, and this is what it checked. Refused unless ``_agent_may``; its
+    "it holds" makes no memory call, and a new text it gives is ``inferred``, not ``said``."""
     answer = answer.strip().lower()
     if q.get("status") == GONE:
         raise ValueError(f"{q['qid']} is gone: its message changed or went since the night; nothing to answer")
@@ -426,7 +527,11 @@ def decide(q: dict, answer: str, text: str | None = None) -> dict:
         raise ValueError(f"{q['qid']} ({q['section']}) takes: {', '.join([*table, LATER])}")
     if q.get("status") in CLOSED:
         raise ValueError(f"{q['qid']} is already {q['status']} ({q.get('answer')}); 'dreamem undo {q['qid']}' first")
+    if by_agent is not None:
+        _agent_may(q, answer, writer)
     action = table[answer]
+    if by_agent is not None and answer in HOLDS and q.get("section") not in ("duplicate", "new_candidate"):
+        action = NOTHING  # not the person's "confirmed", and no trust vote at every check: a rest of our own
     if action is REJECT:
         made, todo = writer.reject_call(q), {"local": REJECT}
     elif action is NOT_DUPLICATES:
@@ -435,7 +540,17 @@ def decide(q: dict, answer: str, text: str | None = None) -> dict:
         made, todo = None, {}
     else:
         made, todo = action(q, text), {}  # raises before anything is recorded when the answer lacks its text
+    if by_agent is not None:
+        for call in made if isinstance(made, list) else [made] if isinstance(made, dict) else []:
+            if (call.get("args") or {}).get("origin") == "said":
+                call["args"]["origin"] = "inferred"  # the agent's conclusion from its check, not the person's words
     q["answer"], q["text"] = answer, text
+    agent_own = q.get("section") == "new_candidate" and answer in ("not-a-fact", "already-stored")
+    q["by"] = AGENT if by_agent is not None or agent_own else PERSON
+    if by_agent is not None:
+        q["verified"] = by_agent
+    else:
+        q.pop("verified", None)
     q["decided_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
     q["status"] = DECIDED
     for k in ("call", "calls", "edit"):
@@ -477,10 +592,11 @@ def applied(q: dict, result: str | None = None, fact_id: int | None = None) -> N
         drop_words(q)
 
 
-WORDS = ("text", "call", "calls", "edit", "result", "failure")
-# What of a question may hold a forgotten fact's text: removed when the fact is forgotten (or deleted) since.
+WORDS = ("text", "call", "calls", "edit", "result", "failure", "verified")
+# What of a question may hold a forgotten fact's text: removed when the fact is forgotten (or deleted) since. The
+# agent's account of its check is among them: it may quote the fact.
 FACT_WORDS = ("content", "keep", "copy", "why", "conflicts", "call", "calls", "edit", "text", "result", "note", "outcome",
-              "locator", "fact", "other", "other_content")  # what of a candidate may hold words: the fact, the call, tool answers
+              "locator", "fact", "other", "other_content", "verified")  # what of a candidate may hold words: the fact, the call, tool answers
 
 
 def drop_words(q: dict) -> None:
@@ -500,7 +616,7 @@ def failed(q: dict, reason: str) -> None:
 
 def undo(q: dict) -> None:
     """Cancel the recorded decision (memory is not touched: a call already made is undone with memory_revert)."""
-    for k in ("answer", "text", "call", "calls", "edit", "decided_at", "result", "failure"):
+    for k in ("answer", "text", "call", "calls", "edit", "decided_at", "result", "failure", "by", "verified"):
         q.pop(k, None)
     q["answer"] = None
     q["status"] = SHOWN

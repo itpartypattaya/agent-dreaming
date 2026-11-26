@@ -45,7 +45,9 @@ def _merge(q, text):
 
 
 _FACT_ANSWERS = {"yes": _feedback("confirmed"), "no": _feedback("unhelpful"), "outdated": _end,
-                 "wrong": _change("memory_correct"), "forget": _forget, "reject": REJECT}
+                 # changed (0.9.0): it was so and is no longer — a version moved on; before, only "wrong" took a text
+                 "changed": _change("memory_change"), "wrong": _change("memory_correct"), "forget": _forget,
+                 "reject": REJECT}
 ANSWERS = {
     # a fact people stand behind, said again on different days
     "promotion": {"yes": _feedback("confirmed"), "no": REJECT, "outdated": _end, "forget": _forget},

@@ -88,6 +88,7 @@ def test_an_answered_report_is_not_asked_again_but_a_new_one_is(world):
     world.outcome("corrected", "stale_version", emitted=[fid], named=[fid])
     q = asked(world)[0]
     review.decide(world.homes, q["qid"], "keep", out=quiet)
+    review.mark(world.homes, q["qid"], "applied", out=quiet)  # the call it printed was made (0.9.0: only then)
     assert asked(world) == []
     q = [q for q in world.questions()["questions"] if q["section"] == "outcome"]
     assert q == []  # answered: not even deferred

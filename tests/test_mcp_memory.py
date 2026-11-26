@@ -66,7 +66,7 @@ def test_the_calls_take_the_servers_own_arguments(world, mem):
                2: ["кошка Pepper опять Has a cat named Pepper"]})
     q = next(q for q in night(world)["questions"] if q.get("content") == "Has a cat named Pepper")
     assert q["provider"] == "mcp-memory" and q["locator"] == {"entity": "Alex", "text": "Has a cat named Pepper"}
-    assert set(questions.answers(q)) == {"yes", "no", "outdated", "wrong", "forget", "reject"}
+    assert set(questions.answers(q)) == {"yes", "no", "outdated", "changed", "wrong", "forget", "reject"}
     out = []
     review.decide(world.homes, q["qid"], "outdated", out=out.append)
     todo = json.loads(out[-1])

@@ -273,7 +273,8 @@ def pass_profile(pdir: Path, profile: config.Profile, settings: dict, tz: str, d
                                   night_tag=uuid.uuid4().hex[:4], went_wrong=wrong,
                                   answered=questions.outcomes_answered(state_dir),
                                   rejected=set(rejected) if isinstance(rejected, dict) else set(), candidates=offered,
-                                  provider=prov, note_pairs=pairs, notes=auto, external_pairs=external_pairs)
+                                  provider=prov, note_pairs=pairs, notes=auto, external_pairs=external_pairs,
+                                  checked=questions.agent_checked(state_dir))
     alerts = [a for a in result.get("alerts") or []
               if coverage_ok or a.get("kind") not in ("memory_loss", "entry_truncated", "probe_missing")]
     if external_budget:

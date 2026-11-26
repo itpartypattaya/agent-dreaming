@@ -2,7 +2,7 @@
 
 A provider reads one store of one memory system for the pass (its facts, the head version of each, what was forgotten)
 and says how a person's answer becomes calls of that system's own tools. The pass and the agent of the review never
-write a store themselves: the provider only prints the calls; the agent makes them in a session, on the person's word.
+write a store themselves: the provider only prints the calls; the agent makes them in a session, on the person's word or its own read-only check.
 
 Facts of a system without numeric ids get surrogate ones (``ids.py``), so the engine and the questions keep their
 integers. Capabilities say what the system can tell or do; a section or an answer that needs a missing one is not

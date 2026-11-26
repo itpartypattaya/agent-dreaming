@@ -54,6 +54,7 @@ def build() -> argparse.ArgumentParser:
     p.add_argument("answer")
     p.add_argument("--text", help="the new text, for changed / wrong")
     p.add_argument("--entity", help="save into the MCP memory server: the entity the fact belongs to")
+    p.add_argument("--verified", help="the agent answers itself, on its own check: what it checked, in a few words")
     p.add_argument("--profile")
     for name, help_ in (("applied", "the memory call of a decided question succeeded"),
                         ("failed", "the memory call was refused; the question comes back"),
@@ -102,7 +103,8 @@ def main(argv=None) -> int:
     if args.cmd == "show":
         return review.show(h, profile=args.profile, as_json=args.json, include_all=args.all)
     if args.cmd == "decide":
-        return review.decide(h, args.qid, args.answer, text=args.text, profile=args.profile, entity=args.entity)
+        return review.decide(h, args.qid, args.answer, text=args.text, profile=args.profile, entity=args.entity,
+                             verified=args.verified)
     if args.cmd in ("applied", "failed", "undo"):
         detail = getattr(args, "result", None) or getattr(args, "reason", None)
         return review.mark(h, args.qid, args.cmd, detail=detail, profile=args.profile,
