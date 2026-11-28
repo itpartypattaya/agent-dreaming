@@ -1,12 +1,14 @@
 # agent-dreaming
 
-A nightly, read-only memory review for **Claude Code**, **Codex CLI** and **Antigravity** (Gemini CLI's sessions are
+A nightly memory review for **Claude Code**, **Codex CLI** and **Antigravity** (Gemini CLI's sessions are
 read too).
 
 Agents that remember things also remember wrong things: a guess stored as a fact, two retellings of one fact, a note
 about a project that ended a month ago. agent-dreaming compares what your agents *stored* with what *you actually said*
-to them, and once a day asks you a handful of short questions about it. It changes memory only when you answer, and
-only through the memory tools your agent already has.
+to them, and once a day asks you a handful of short questions about it. The nightly pass only reads and writes
+nothing outside `~/.dreaming`. Memory changes only through the memory tools your agent already has: a technical fact
+the agent has checked itself (a version, a path, a config), a duplicate that adds nothing, and everything else only
+when you answer.
 
 ![Architecture: the pass reads transcripts, sessions, notes and the fact store read-only, writes only to ~/.dreaming; the session hooks show one line and the review skill asks you; memory changes only through the memory tools or a checked edit of a note, on your answer or the agent's own read-only check of a technical fact](docs/diagrams/architecture.svg)
 

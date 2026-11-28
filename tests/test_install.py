@@ -1,6 +1,7 @@
 """Installing into Codex: one marked block, idempotent, removable exactly; the TOML stays valid; the user's own
 settings around it are kept. The skill ships one text for both CLIs, named per CLI."""
 import io
+import json
 import tomllib
 from pathlib import Path
 
@@ -71,16 +72,40 @@ def test_skill_frontmatter_is_strict_yaml():
         assert body.strip()
 
 
-def test_skill_without_dreamem_gives_the_readme_install_command():
-    # The directory installs the plugin alone: the skill must tell a person without the program how to get it,
-    # with the very command the README gives.
+def test_skill_without_dreamem_points_to_the_readme_install_section():
+    # The directory installs the plugin alone: the skill must tell a person without the program where to get it.
+    # Since 27.11.2026 the directory refuses a plugin whose text states a set-up step that downloads and runs the
+    # publisher's code without pinning both its version and a checksum (v0.9.1 refused for the README's command in
+    # the skill). So the plugin names no install command at all and links to the README's "Install" section.
     root = Path(__file__).resolve().parent.parent
     readme = (root / "README.md").read_text(encoding="utf-8")
-    skill = (root / "dreamem" / "skill" / "SKILL.md").read_text(encoding="utf-8")
-    command = "uv tool install git+https://github.com/itpartypattaya/agent-dreaming"
-    assert command in readme
+    assert "\n## Install\n" in readme  # the anchor the link lands on
+    assert "uv tool install git+https://github.com/itpartypattaya/agent-dreaming" in readme
+    plugin = root / "claude-plugin"
+    skill = (plugin / "skills" / "dream" / "SKILL.md").read_text(encoding="utf-8")
     assert "## When `dreamem` is missing" in skill
-    assert command in skill.split("## When `dreamem` is missing", 1)[1]
+    missing = skill.split("## When `dreamem` is missing", 1)[1]
+    assert "https://github.com/itpartypattaya/agent-dreaming#install" in missing
+    for path in plugin.rglob("*"):
+        if path.suffix in (".md", ".json"):
+            text = path.read_text(encoding="utf-8")
+            for fetch in ("uv tool install", "pip install", "uvx ", "pipx ", "git+http"):
+                assert fetch not in text, f"{path.name} states a set-up step that fetches code: {fetch!r}"
+
+
+def test_plugin_description_promises_nothing_the_skill_does_not_keep():
+    # The directory refused v0.9.1 for "a safety or privacy claim that the tools contradict": the manifest said
+    # "read-only" and "changes memory only on your yes", while the skill (since 0.9.0) has the agent correct a
+    # technical fact and merge a retelling itself, and delete notes. The description must say what really happens.
+    root = Path(__file__).resolve().parent.parent
+    manifest = json.loads((root / "claude-plugin" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    skill = (root / "claude-plugin" / "skills" / "dream" / "SKILL.md").read_text(encoding="utf-8")
+    description = manifest["description"].lower()
+    assert "--verified" in skill  # the agent does answer some questions itself
+    assert "only on your yes" not in description
+    assert "read-only memory review" not in description
+    assert "technical" in description  # what the agent changes on its own is named
+    assert "~/.dreaming" in description  # where the nightly pass writes
 
 
 def test_plugin_icon_sits_where_the_directory_looks():

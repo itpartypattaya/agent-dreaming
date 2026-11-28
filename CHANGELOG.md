@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.2 — 2026-11-28
+
+The Anthropic directory refused 0.9.1 on two points of the plugin's text, not its code.
+
+- The skill no longer gives the install command (`uv tool install git+…` fetched whatever the repository held, with no
+  pinned version or checksum). Without `dreamem` it gives the person the link to the README's "Install" section.
+- The plugin's description no longer says "read-only" and "changes memory only on your yes": since 0.9.0 the review
+  agent corrects a technical fact it has checked and merges a duplicate that adds nothing by itself. It now says what
+  the nightly pass writes (`~/.dreaming` only), what the agent closes on its own, and that personal facts and
+  preferences change only on your answer. The README's opening says the same.
+
 ## 0.9.1 — 2026-11-27
 
 Two guards around the review agent's own answers (Anton, after 0.9.0: which facts are technical was the skill's word

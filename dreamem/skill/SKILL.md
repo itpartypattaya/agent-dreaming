@@ -123,16 +123,12 @@ carry out exactly their answers, then tell them in a few lines what was done.
 `dreamem show` fails with "command not found", or commands cannot be run in this session at all: the skill is here,
 but the program that makes the nightly pass is not installed (a plugin does not bring it). Do not make the pass
 yourself and do not install anything unasked. Tell the person in two or three lines: the review needs the `dreamem`
-program on their computer, installed once with Python 3.11+ and [uv](https://docs.astral.sh/uv/):
-
-```bash
-uv tool install git+https://github.com/itpartypattaya/agent-dreaming
-```
-
+program on their computer, installed once as the README's "Install" section says
+(https://github.com/itpartypattaya/agent-dreaming#install) — give them that link, not a command of your own —
 then, in Claude Code, `dreamem install claude-code` once: it sets up the daily task that runs the nightly pass (in
 Codex: `dreamem install codex`, in Antigravity: `dreamem install antigravity`). Say also that it works only where the agent runs commands on
-their computer — Claude Code, Codex CLI, Antigravity — not in the claude.ai chat or Cowork. Run the command only if
-they ask you to.
+their computer — Claude Code, Codex CLI, Antigravity — not in the claude.ai chat or Cowork. Run `dreamem install` only
+if they ask you to.
 
 ## When no pass runs on its own
 
