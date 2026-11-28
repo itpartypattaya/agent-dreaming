@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.3 — 2026-11-28
+
+The plugin goes through this repository's own marketplace only (Anton: the Anthropic directory refused 0.9.1 and 0.9.2
+for a stated set-up step without a pinned version and checksum, and a link to the README counted as one too).
+
+- The skill gives the install command again when `dreamem` is missing, the same as the README.
+- The marketplace entry no longer says "read-only" and "changes only on your yes": it says, as the plugin's own
+  description since 0.9.2, that the agent corrects a technical fact it has checked and personal facts and
+  preferences change only on your answer.
+
 ## 0.9.2 — 2026-11-28
 
 The Anthropic directory refused 0.9.1 on two points of the plugin's text, not its code.
