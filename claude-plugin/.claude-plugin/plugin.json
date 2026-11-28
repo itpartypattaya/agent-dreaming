@@ -1,6 +1,6 @@
 {
   "name": "agent-dreaming",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "A nightly memory review for Claude Code. The dreamem program reads what you said to Claude Code and Codex, checks it against the facts agents stored (holographic-memory) and Claude's own memory notes, and writes only its own files in ~/.dreaming. The review skill then closes what a read-only check settles (files, git, a read-only command on a server): it corrects a technical fact such as a version, a path or a config, and merges a duplicate that adds nothing, saying what it checked. Everything else it asks you; personal facts and preferences change only on your answer. It edits and deletes facts and Claude Code memory notes through the memory tools. Needs the dreamem program, installed apart (see the README).",
   "author": {
     "name": "Anton Vaskov",

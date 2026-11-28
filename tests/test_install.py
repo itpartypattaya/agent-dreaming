@@ -72,40 +72,37 @@ def test_skill_frontmatter_is_strict_yaml():
         assert body.strip()
 
 
-def test_skill_without_dreamem_points_to_the_readme_install_section():
-    # The directory installs the plugin alone: the skill must tell a person without the program where to get it.
-    # Since 27.11.2026 the directory refuses a plugin whose text states a set-up step that downloads and runs the
-    # publisher's code without pinning both its version and a checksum (v0.9.1 refused for the README's command in
-    # the skill). So the plugin names no install command at all and links to the README's "Install" section.
+def test_skill_without_dreamem_gives_the_readme_install_command():
+    # A person who has the plugin but not the program must get it from the skill in one step: the very command the
+    # README gives. (0.9.2 left only a link, for the Anthropic directory; on 28.11.2026 Anton dropped the directory,
+    # the plugin goes through the repository's own marketplace, so the command is back.)
     root = Path(__file__).resolve().parent.parent
     readme = (root / "README.md").read_text(encoding="utf-8")
-    assert "\n## Install\n" in readme  # the anchor the link lands on
-    assert "uv tool install git+https://github.com/itpartypattaya/agent-dreaming" in readme
-    plugin = root / "claude-plugin"
-    skill = (plugin / "skills" / "dream" / "SKILL.md").read_text(encoding="utf-8")
-    assert "## When `dreamem` is missing" in skill
-    missing = skill.split("## When `dreamem` is missing", 1)[1]
-    assert "https://github.com/itpartypattaya/agent-dreaming#install" in missing
-    for path in plugin.rglob("*"):
-        if path.suffix in (".md", ".json"):
-            text = path.read_text(encoding="utf-8")
-            for fetch in ("uv tool install", "pip install", "uvx ", "pipx ", "git+http"):
-                assert fetch not in text, f"{path.name} states a set-up step that fetches code: {fetch!r}"
+    command = "uv tool install git+https://github.com/itpartypattaya/agent-dreaming"
+    assert command in readme
+    for skill_path in (root / "dreamem" / "skill" / "SKILL.md", root / "claude-plugin" / "skills" / "dream" / "SKILL.md"):
+        skill = skill_path.read_text(encoding="utf-8")
+        assert "## When `dreamem` is missing" in skill
+        assert command in skill.split("## When `dreamem` is missing", 1)[1]
 
 
-def test_plugin_description_promises_nothing_the_skill_does_not_keep():
-    # The directory refused v0.9.1 for "a safety or privacy claim that the tools contradict": the manifest said
-    # "read-only" and "changes memory only on your yes", while the skill (since 0.9.0) has the agent correct a
-    # technical fact and merge a retelling itself, and delete notes. The description must say what really happens.
+def test_plugin_descriptions_promise_nothing_the_skill_does_not_keep():
+    # The plugin's manifest and the marketplace entry said "read-only" and "changes memory only on your yes", while
+    # the skill (since 0.9.0) has the agent correct a technical fact and merge a retelling itself, and delete notes.
+    # Every description a person reads before installing must say what really happens.
     root = Path(__file__).resolve().parent.parent
     manifest = json.loads((root / "claude-plugin" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    market = json.loads((root / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
     skill = (root / "claude-plugin" / "skills" / "dream" / "SKILL.md").read_text(encoding="utf-8")
-    description = manifest["description"].lower()
     assert "--verified" in skill  # the agent does answer some questions itself
-    assert "only on your yes" not in description
-    assert "read-only memory review" not in description
-    assert "technical" in description  # what the agent changes on its own is named
-    assert "~/.dreaming" in description  # where the nightly pass writes
+    entry = next(p for p in market["plugins"] if p["name"] == "agent-dreaming")
+    for description in (manifest["description"], market["description"], entry["description"]):
+        lowered = description.lower()
+        assert "only on your yes" not in lowered, description
+        assert "read-only memory review" not in lowered, description
+    for description in (manifest["description"], entry["description"]):
+        assert "technical" in description.lower(), description  # what the agent changes on its own is named
+    assert "~/.dreaming" in manifest["description"]  # where the nightly pass writes
 
 
 def test_plugin_icon_sits_where_the_directory_looks():

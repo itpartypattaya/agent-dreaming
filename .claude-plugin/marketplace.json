@@ -1,6 +1,6 @@
 {
   "name": "agent-dreaming",
-  "description": "Nightly read-only memory review for Claude Code, Codex CLI and Antigravity.",
+  "description": "Nightly memory review for Claude Code, Codex CLI and Antigravity.",
   "owner": {
     "name": "itpartypattaya"
   },
@@ -8,7 +8,7 @@
     {
       "name": "agent-dreaming",
       "source": "./claude-plugin",
-      "description": "Nightly read-only memory review: a few questions about your agents' memory each day, changes only on your yes (needs dreamem on PATH: uv tool install git+https://github.com/itpartypattaya/agent-dreaming)"
+      "description": "Nightly memory review: a few questions about your agents' memory each day. The agent corrects a technical fact it has checked itself; personal facts and preferences change only on your answer (needs dreamem on PATH: uv tool install git+https://github.com/itpartypattaya/agent-dreaming)"
     }
   ]
 }
